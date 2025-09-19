@@ -41,7 +41,6 @@
 #include <Unreal/Property/FBoolProperty.hpp>
 #include <Unreal/Property/FClassProperty.hpp>
 #include <Unreal/Property/FEnumProperty.hpp>
-#include <Unreal/Property/FSetProperty.hpp>
 #include <Unreal/Property/FMapProperty.hpp>
 #include <Unreal/Property/FNameProperty.hpp>
 #include <Unreal/Property/FObjectProperty.hpp>
@@ -795,7 +794,6 @@ namespace RC
         // add_property_type_table<Unreal::FStrProperty>(lua, property_types_table, "StrProperty");
         add_property_type_table<Unreal::FBoolProperty>(lua, property_types_table, "BoolProperty");
         add_property_type_table<Unreal::FArrayProperty>(lua, property_types_table, "ArrayProperty");
-        add_property_type_table<Unreal::FSetProperty>(lua, property_types_table, "SetProperty");
         add_property_type_table<Unreal::FMapProperty>(lua, property_types_table, "MapProperty");
         add_property_type_table<Unreal::FStructProperty>(lua, property_types_table, "StructProperty");
         add_property_type_table<Unreal::FClassProperty>(lua, property_types_table, "ClassProperty");
@@ -2521,7 +2519,7 @@ Overloads:
 #1: IterateGameDirectories())"};
 
             std::filesystem::path game_executable_directory = UE4SSProgram::get_program().get_game_executable_directory();
-            auto game_content_dir = game_executable_directory.parent_path().parent_path() / "Content";
+            auto game_content_dir = game_executable_directory / "Game" / "Content";
             if (!std::filesystem::exists(game_content_dir))
             {
                 Output::send<LogLevel::Warning>(STR("IterateGameDirectories: Could not locate the root directory because the directory structure is unknown "
@@ -2530,8 +2528,8 @@ Overloads:
                 return 1;
             }
 
-            auto game_name = game_executable_directory.parent_path().parent_path().stem();
-            auto game_root_directory = game_executable_directory.parent_path().parent_path().parent_path();
+            auto game_name = "Ace7Game";
+            auto game_root_directory = game_executable_directory;
             auto directories_table = lua.prepare_new_table();
 
             std::function<void(const std::filesystem::path&, LuaMadeSimple::Lua::Table&)> iterate_directory =
@@ -2666,6 +2664,7 @@ Overloads:
                                                     if (std::filesystem::exists(content_dir))
                                                     {
                                                         auto logic_mods_dir = content_dir / "Paks/LogicMods";
+                                                        auto logic_mods_dir_t = content_dir / "Paks/~LogicMods";
 
                                                         // Check if it exists or try to create it
                                                         if (!std::filesystem::exists(logic_mods_dir))
@@ -2679,9 +2678,25 @@ Overloads:
                                                             std::filesystem::create_directory(logic_mods_dir, dir_ec);
                                                         }
 
+                                                        if (!std::filesystem::exists(logic_mods_dir_t))
+                                                        {
+                                                            std::error_code dir_ec;
+                                                            auto paks_dir = content_dir / "Paks";
+                                                            if (!std::filesystem::exists(paks_dir))
+                                                            {
+                                                                std::filesystem::create_directory(paks_dir, dir_ec);
+                                                            }
+                                                            std::filesystem::create_directory(logic_mods_dir_t, dir_ec);
+                                                        }
+
                                                         if (std::filesystem::exists(logic_mods_dir))
                                                         {
                                                             path_wstr = logic_mods_dir.wstring();
+                                                        }
+
+                                                        if (std::filesystem::exists(logic_mods_dir_t))
+                                                        {
+                                                            path_wstr = logic_mods_dir_t.wstring();
                                                         }
                                                     }
                                                 }
@@ -2782,7 +2797,7 @@ Overloads:
             try
             {
                 std::filesystem::path game_executable_directory = UE4SSProgram::get_program().get_game_executable_directory();
-                auto game_content_dir = game_executable_directory.parent_path().parent_path() / "Content";
+                auto game_content_dir = game_executable_directory / "Game" / "Content";
                 if (!std::filesystem::exists(game_content_dir))
                 {
                     lua.throw_error("CreateLogicModsDirectory: Could not locate the \"Content\" directory because the directory structure is unknown (not "
@@ -2840,6 +2855,77 @@ Overloads:
             catch (const std::exception& e)
             {
                 Output::send<LogLevel::Error>(STR("Exception in CreateLogicModsDirectory: {}\n"), to_wstring(e.what()));
+                lua.throw_error(e.what());
+                return 0;
+            }
+        });
+
+        lua.register_function("CreateLogicModsTildeDirectory", [](const LuaMadeSimple::Lua& lua) -> int {
+            std::string error_overload_not_found{R"(
+No overload found for function 'CreateLogicModsTildeDirectory'.
+Overloads:
+#1: CreateLogicModsTildeDirectory())"};
+            try
+            {
+                std::filesystem::path game_executable_directory = UE4SSProgram::get_program().get_game_executable_directory();
+                auto game_content_dir = game_executable_directory / "Game" / "Content";
+                if (!std::filesystem::exists(game_content_dir))
+                {
+                    lua.throw_error("CreateLogicModsTildeDirectory: Could not locate the \"Content\" directory because the directory structure is unknown (not "
+                                    "<RootGamePath>/Game/Content)\n");
+                }
+
+                auto logic_mods_dir_t = game_content_dir / "Paks/~LogicMods";
+
+                std::error_code ec;
+                if (std::filesystem::exists(logic_mods_dir_t, ec))
+                {
+                    Output::send<LogLevel::Warning>(
+                            STR("CreateLogicModsTildeDirectory: \"~LogicMods\" directory already exists. Cancelling creation of new directory.\n"));
+                    lua.set_bool(true);
+                    return 1;
+                }
+
+                // Try to create the Paks directory first if it doesn't exist
+                auto paks_dir = game_content_dir / "Paks";
+                if (!std::filesystem::exists(paks_dir, ec))
+                {
+                    ec.clear();
+                    bool paks_created = std::filesystem::create_directory(paks_dir, ec);
+                    if (!paks_created || ec)
+                    {
+                        Output::send<LogLevel::Error>(STR("CreateLogicModsTildeDirectory: Failed to create Paks directory: {}\n"), to_wstring(ec.message()));
+                        // Try to continue anyway
+                    }
+                }
+
+                // Now create the LogicMods directory
+                ec.clear();
+                bool created = std::filesystem::create_directory(logic_mods_dir_t, ec);
+
+                if (!created || ec)
+                {
+                    Output::send<LogLevel::Error>(STR("CreateLogicModsTildeDirectory: Error creating directory: {}\n"), to_wstring(ec.message()));
+
+                    // Check if the directory exists despite the error (might happen with Unicode paths)
+                    ec.clear();
+                    if (std::filesystem::exists(logic_mods_dir_t, ec))
+                    {
+                        lua.set_bool(true);
+                        return 1;
+                    }
+
+                    lua.throw_error("CreateLogicModsTildeDirectory: Unable to create \"~LogicMods\" directory. Try creating manually.\n");
+                }
+
+                Output::send<LogLevel::Warning>(STR("CreateLogicModsTildeDirectory: ~LogicMods directory created.\n"));
+
+                lua.set_bool(true);
+                return 1;
+            }
+            catch (const std::exception& e)
+            {
+                Output::send<LogLevel::Error>(STR("Exception in CreateLogicModsTildeDirectory: {}\n"), to_wstring(e.what()));
                 lua.throw_error(e.what());
                 return 0;
             }
@@ -4352,87 +4438,83 @@ Overloads:
         Unreal::Hook::RegisterLoadMapPreCallback(
                 [](Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error)
                         -> std::pair<bool, bool> {
-                    return TRY([&] {
-                        for (const auto& callback_data : m_load_map_pre_callbacks)
+                    for (const auto& callback_data : m_load_map_pre_callbacks)
+                    {
+                        std::pair<bool, bool> return_value{};
+
+                        for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
                         {
-                            std::pair<bool, bool> return_value{};
+                            const auto& lua = *lua_ptr;
 
-                            for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
+                            lua.registry().get_function_ref(registry_index.lua_index);
+                            static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"));
+                            LuaType::RemoteUnrealParam::construct(lua, &Engine, s_object_property_name);
+                            LuaType::RemoteUnrealParam::construct(lua, &WorldContext.GetThisCurrentWorld(), s_object_property_name);
+                            LuaType::FURL::construct(lua, URL);
+                            LuaType::RemoteUnrealParam::construct(lua, &PendingGame, s_object_property_name);
+                            callback_data.lua->set_string(to_string(Error.GetCharArray()));
+                            lua.call_function(5, 1);
+
+                            if (callback_data.lua->is_nil())
                             {
-                                const auto& lua = *lua_ptr;
-
-                                lua.registry().get_function_ref(registry_index.lua_index);
-                                static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"));
-                                LuaType::RemoteUnrealParam::construct(lua, &Engine, s_object_property_name);
-                                LuaType::RemoteUnrealParam::construct(lua, &WorldContext.GetThisCurrentWorld(), s_object_property_name);
-                                LuaType::FURL::construct(lua, URL);
-                                LuaType::RemoteUnrealParam::construct(lua, &PendingGame, s_object_property_name);
-                                callback_data.lua->set_string(to_string(Error.GetCharArray()));
-                                lua.call_function(5, 1);
-
-                                if (callback_data.lua->is_nil())
-                                {
-                                    return_value.first = false;
-                                    callback_data.lua->discard_value();
-                                }
-                                else if (!callback_data.lua->is_bool())
-                                {
-                                    throw std::runtime_error{"A callback for 'LoadMap' must return bool or nil"};
-                                }
-                                else
-                                {
-                                    return_value.first = true;
-                                    return_value.second = callback_data.lua->get_bool();
-                                }
+                                return_value.first = false;
+                                callback_data.lua->discard_value();
                             }
-
-                            return return_value;
+                            else if (!callback_data.lua->is_bool())
+                            {
+                                throw std::runtime_error{"A callback for 'LoadMap' must return bool or nil"};
+                            }
+                            else
+                            {
+                                return_value.first = true;
+                                return_value.second = callback_data.lua->get_bool();
+                            }
                         }
-                        return std::pair<bool, bool>{false, false};
-                    });
+
+                        return return_value;
+                    }
+                    return std::pair<bool, bool>{false, false};
                 });
 
         Unreal::Hook::RegisterLoadMapPostCallback(
                 [](Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error)
                         -> std::pair<bool, bool> {
-                    return TRY([&] {
-                        for (const auto& callback_data : m_load_map_post_callbacks)
+                    for (const auto& callback_data : m_load_map_post_callbacks)
+                    {
+                        std::pair<bool, bool> return_value{};
+
+                        for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
                         {
-                            std::pair<bool, bool> return_value{};
+                            const auto& lua = *lua_ptr;
 
-                            for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
+                            lua.registry().get_function_ref(registry_index.lua_index);
+                            static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"));
+                            LuaType::RemoteUnrealParam::construct(lua, &Engine, s_object_property_name);
+                            LuaType::RemoteUnrealParam::construct(lua, &WorldContext.GetThisCurrentWorld(), s_object_property_name);
+                            LuaType::FURL::construct(lua, URL);
+                            LuaType::RemoteUnrealParam::construct(lua, &PendingGame, s_object_property_name);
+                            callback_data.lua->set_string(to_string(Error.GetCharArray()));
+                            lua.call_function(5, 1);
+
+                            if (callback_data.lua->is_nil())
                             {
-                                const auto& lua = *lua_ptr;
-
-                                lua.registry().get_function_ref(registry_index.lua_index);
-                                static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"));
-                                LuaType::RemoteUnrealParam::construct(lua, &Engine, s_object_property_name);
-                                LuaType::RemoteUnrealParam::construct(lua, &WorldContext.GetThisCurrentWorld(), s_object_property_name);
-                                LuaType::FURL::construct(lua, URL);
-                                LuaType::RemoteUnrealParam::construct(lua, &PendingGame, s_object_property_name);
-                                callback_data.lua->set_string(to_string(Error.GetCharArray()));
-                                lua.call_function(5, 1);
-
-                                if (callback_data.lua->is_nil())
-                                {
-                                    return_value.first = false;
-                                    callback_data.lua->discard_value();
-                                }
-                                else if (!callback_data.lua->is_bool())
-                                {
-                                    throw std::runtime_error{"A callback for 'LoadMap' must return bool or nil"};
-                                }
-                                else
-                                {
-                                    return_value.first = true;
-                                    return_value.second = callback_data.lua->get_bool();
-                                }
+                                return_value.first = false;
+                                callback_data.lua->discard_value();
                             }
-
-                            return return_value;
+                            else if (!callback_data.lua->is_bool())
+                            {
+                                throw std::runtime_error{"A callback for 'LoadMap' must return bool or nil"};
+                            }
+                            else
+                            {
+                                return_value.first = true;
+                                return_value.second = callback_data.lua->get_bool();
+                            }
                         }
-                        return std::pair<bool, bool>{false, false};
-                    });
+
+                        return return_value;
+                    }
+                    return std::pair<bool, bool>{false, false};
                 });
 
         Unreal::Hook::RegisterInitGameStatePreCallback([]([[maybe_unused]] Unreal::AGameModeBase* Context) {
@@ -4566,35 +4648,40 @@ Overloads:
         });
 
         Unreal::Hook::RegisterStaticConstructObjectPostCallback([](const Unreal::FStaticConstructObjectParameters&, Unreal::UObject* constructed_object) {
-            return TRY([&] {
-                Unreal::UStruct* object_class = constructed_object->GetClassPrivate();
-                while (object_class)
-                {
-                    std::erase_if(m_static_construct_object_lua_callbacks, [&](auto& callback_data) -> bool {
-                        bool cancel = false;
-                        if (callback_data.instance_of_class == object_class)
+            Unreal::UStruct* object_class = constructed_object->GetClassPrivate();
+            while (object_class)
+            {
+                std::erase_if(m_static_construct_object_lua_callbacks, [&](auto& callback_data) -> bool {
+                    bool cancel = false;
+                    if (callback_data.instance_of_class == object_class)
+                    {
+                        try
                         {
                             callback_data.lua->registry().get_function_ref(callback_data.lua_callback_function_ref);
                             LuaType::auto_construct_object(*callback_data.lua, constructed_object);
                             callback_data.lua->call_function(1, 1);
 
                             cancel = callback_data.lua->is_bool(-1) && callback_data.lua->get_bool(-1);
-
-                            if (cancel)
-                            {
-                                // Release the thread_ref to GC.
-                                luaL_unref(callback_data.lua->get_lua_state(), LUA_REGISTRYINDEX, callback_data.lua_callback_thread_ref);
-                            }
+                        }
+                        catch (std::runtime_error& e)
+                        {
+                            Output::send(STR("{}\n"), ensure_str(e.what()));
                         }
 
-                        return cancel;
-                    });
+                        if (cancel)
+                        {
+                            // Release the thread_ref to GC.
+                            luaL_unref(callback_data.lua->get_lua_state(), LUA_REGISTRYINDEX, callback_data.lua_callback_thread_ref);
+                        }
+                    }
 
-                    object_class = object_class->GetSuperStruct();
-                }
+                    return cancel;
+                });
 
-                return constructed_object;
-            });
+                object_class = object_class->GetSuperStruct();
+            }
+
+            return constructed_object;
         });
 
         Unreal::Hook::RegisterULocalPlayerExecPreCallback([](Unreal::ULocalPlayer* context, Unreal::UWorld* in_world, const TCHAR* cmd, Unreal::FOutputDevice& ar)

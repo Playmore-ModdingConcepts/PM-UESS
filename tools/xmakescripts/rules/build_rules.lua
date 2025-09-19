@@ -108,8 +108,7 @@ local MSVC_COMPILE_OPTIONS = {
         "/wd4068",
         "/Zc:inline",
         "/Zc:strictStrings",
-        "/Zc:preprocessor",
-        "/utf-8"  
+        "/Zc:preprocessor"  
     },
     ["ldflags"] = {
         "/DEBUG:FULL"

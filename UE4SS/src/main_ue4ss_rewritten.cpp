@@ -40,8 +40,6 @@ auto thread_dll_start(UE4SSProgram* program) -> unsigned long
     return 0;
 }
 
-static bool s_wait_for_ue4ss{};
-
 auto process_initialized(HMODULE moduleHandle) -> void
 {
     wchar_t moduleFilenameBuffer[1024]{'\0'};
@@ -51,11 +49,6 @@ auto process_initialized(HMODULE moduleHandle) -> void
     if (HANDLE handle = CreateThread(nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(thread_dll_start), (LPVOID)program, 0, nullptr); handle)
     {
         CloseHandle(handle);
-    }
-
-    if (s_wait_for_ue4ss)
-    {
-        UE4SSProgram::cpp_mods_done_loading.wait(false, std::memory_order_relaxed);
     }
 }
 
@@ -114,12 +107,10 @@ auto dll_process_attached(HMODULE moduleHandle) -> void
     // injected through proxy
     if (GetCurrentThreadId() == get_main_thread_id())
     {
-        s_wait_for_ue4ss = true;
         QueueUserAPC((PAPCFUNC)process_initialized, GetCurrentThread(), (ULONG_PTR)moduleHandle);
     }
     else // injected manually -> thread id different from main
     {
-        s_wait_for_ue4ss = false;
         process_initialized(moduleHandle);
     }
 }

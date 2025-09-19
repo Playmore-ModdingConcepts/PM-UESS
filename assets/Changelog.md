@@ -11,8 +11,6 @@ some notes about most important changes such as:
 
 ### General
 
-Added support for UE Version 5.6 - ([UE4SS #977](https://github.com/UE4SS-RE/RE-UE4SS/pull/977)) 
-
 Added support for UE Version 5.5 - ([UE4SS #708](https://github.com/UE4SS-RE/RE-UE4SS/pull/708)) 
 
 Added support for UE Version 5.4 - ([UE4SS #503](https://github.com/UE4SS-RE/RE-UE4SS/pull/503)) 
@@ -23,12 +21,7 @@ Added basic support for Development/Debug/Test built Unreal Engine games ([UE4SS
 Added new build definition "LessEqual421".  Using this definition for games on UE<=4.21 is not mandatory for UE4SS to function, but will ensure the correct alignment is used in containers. 
 
 **BREAKING:** - This also changes the default FName alignment from 8 to 4. 
-- To use this functionality, enter LessEqual421 in the <Target> section of the XMake configuration command.
-
-**BREAKING:** Changed default `EFindName` parameter for FName constructors from `FNAME_Find` to `FNAME_Add`. 
-- FName constructors will now create new name table entries by default if the name doesn't exist, rather than returning NAME_None
-- To maintain the old behavior, explicitly pass `FNAME_Find` as the second parameter
-- This affects all string-based FName constructors 
+- To use this functionality, enter LessEqual421 in the <Target> section of the XMake configuration command. 
 
 Added optional scans for GUObjectHashTables, GNatives and ConsoleManagerSingleton; made FText an optional scan; externed the found GNatives for use by mods([UE4SS #744](https://github.com/UE4SS-RE/RE-UE4SS/pull/744)) 
 - GUObjectHashTables and ConsoleManagerSingleton are currently unused and a WIP.
@@ -68,30 +61,7 @@ Added ability to call UFunctions directly from the GUI. ([UE4SS #851](https://gi
 **Updated Lua version to 5.4.7** ([UE4SS #887](https://github.com/UE4SS-RE/RE-UE4SS/pull/887))
 - This is necessary to compile with Clang.
 
-Added `UDataTable` support to Lua API. ([UE4SS #997](https://github.com/UE4SS-RE/RE-UE4SS/pull/997))
-- Find rows by name with `DataTable:FindRow(RowName)`
-- Get all rows with `DataTable:GetAllRows()` 
-- Iterate rows with `DataTable:ForEachRow(Callback)`
-- Add/remove rows dynamically with `DataTable:AddRow(RowName, RowData)` and `DataTable:RemoveRow(RowName)`
-- Access row names with `DataTable:GetRowNames()`
-- Get the entire row map with `DataTable:GetRowMap()`
-- Clear all rows with `DataTable:EmptyTable()`
-- Get row count with `#DataTable` operator
-
-Enhanced TArray support to enable round-trip functionality ([UE4SS #992](https://github.com/UE4SS-RE/RE-UE4SS/pull/992))
-- TArray userdata can now be passed as function parameters
-- Improved handling of empty arrays and nil values
-- Fixed proper element copying when passing arrays between Lua and C++
-
-Added `TSet` implementation. [UE4SS #883](https://github.com/UE4SS-RE/RE-UE4SS/pull/883)
-
 Added `TMap` implementation. [UE4SS #755](https://github.com/UE4SS-RE/RE-UE4SS/issues/755)
-
-Enhanced TMap support to enable round-trip functionality [UE4SS #933](https://github.com/UE4SS-RE/RE-UE4SS/issues/993)
-- TMap userdata can now be passed as function parameters
-- Improved handling of empty maps and nil values
-- Fixed proper key-value pair copying when passing maps between Lua and C++
-- Added proper rehashing to ensure map integrity after copying
 
 Added global function `CreateInvalidObject`, which returns an invalid UObject. ([UE4SS #652](https://github.com/UE4SS-RE/RE-UE4SS/issues/652))  
 
@@ -142,12 +112,6 @@ Added custom module searcher with UTF-8 path support for Lua `require()` ([UE4SS
 - Added annotation for function `FText` to Types.lua. ([UE4SS #788](https://github.com/UE4SS-RE/RE-UE4SS/pull/788))
 
 ### C++ API 
-
-Added `UDataTable` class to C++ API. ([UE4SS #997](https://github.com/UE4SS-RE/RE-UE4SS/pull/997))
-- Full DataTable row access with `FindRow<T>()`, `GetAllRows<T>()`, and `ForEachRow<T>()`
-- Row manipulation with `AddRow()`, `RemoveRow()`, and `EmptyTable()`
-- Direct implementations that work across all UE versions without relying on virtual functions
-
 Key binds created with `UE4SSProgram::register_keydown_event` end up being duplicated upon mod hot-reload.  
 - To fix this, `CppUserModBase::register_keydown_event` has been introduced.  
 - It's used exactly the same way except without the `UE4SSProgram::` part. ([UE4SS #446](https://github.com/UE4SS-RE/RE-UE4SS/pull/446)) 
@@ -201,11 +165,9 @@ Added improved string and path conversion utilities with proper UTF-8 support ([
 
 ### General 
 
-Updated ImGui from v1.89 to v1.92.1 for improved functionality and Clang compatability 
+Updated ImGui from v1.89 to v1.91.9b for improved functionality and Clang compatability 
 
 Updated ImGuiTextEdit to support newest ImGui API 
-
-Updated fmt library to 11.2.0
 
 Changed the default location of the UE4SS release assets to be in `game executable directory/ue4ss/`. This change is backwards compatible with the old location. ([UE4SS #506](https://github.com/UE4SS-RE/RE-UE4SS/pull/506)) - Buckminsterfullerene 
 
@@ -217,8 +179,6 @@ The `GuiConsoleEnabled` option in UE4SS-settings.ini is now set to 0 by default 
 release ([UE4SS #779](https://github.com/UE4SS-RE/RE-UE4SS/pull/779))
 
 Removed some development mods, `README.md` & `Changelog.md` from non-zDev release, added `LICENCE` file to both release types ([UE4SS #830](https://github.com/UE4SS-RE/RE-UE4SS/pull/830))
-
-The execution of the game is now paused durin the first AOB scan, and then resumed to complete potential further scans and initialization. ([UE4SS #985](https://github.com/UE4SS-RE/RE-UE4SS/pull/985))
 
 ### Live View 
 Fixed the majority of the lag ([UE4SS #512](https://github.com/UE4SS-RE/RE-UE4SS/pull/512)) 
@@ -308,11 +268,6 @@ Fixed crash caused by using invalid iterator. ([UE4SS #771](https://github.com/U
 Fixed opened object getting clipped too early ([UE4SS #814](https://github.com/UE4SS-RE/RE-UE4SS/pull/814)) -
 Corporalwill123
 
-Made StructProperty and ArrayProperty Expandable, making contained properties directly viewable ([UE4SS #943](https://github.com/UE4SS-RE/RE-UE4SS/pull/943)) -
-Corporalwill123
-
-Fixed crash on warning in dumpers and generators ([UE4SS #976](https://github.com/UE4SS-RE/RE-UE4SS/pull/976))
-
 ### UHT Dumper 
 Fix SetupAttachment implementations randomly changing order ([UE4SS #606](https://github.com/UE4SS-RE/RE-UE4SS/pull/606)) - Buckminsterfullerene 
 
@@ -359,8 +314,6 @@ names. ([UE4SS #827](https://github.com/UE4SS-RE/RE-UE4SS/pull/827)
 
 Fixed an error with Object properties causing stack corruption. ([UE4SS #939](https://github.com/UE4SS-RE/RE-UE4SS/pull/939)
 
-Fixed UEHelpers sometimes causing a runtime error. ([UE4SS #987](https://github.com/UE4SS-RE/RE-UE4SS/pull/987)
-
 ### C++ API 
 Fixed a crash caused by a race condition enabled by C++ mods using `UE4SS_ENABLE_IMGUI` in their constructor ([UE4SS #481](https://github.com/UE4SS-RE/RE-UE4SS/pull/481)) 
 
@@ -385,13 +338,6 @@ Fixed `LoadMod` function issue that variables would go out-of-scope in the `Exec
 
 ### Added 
 ```ini
-[General]
-; The key that will trigger a reload of all mods.
-; The CTRL key is always required.
-; Valid values (case-insensitive): Anything from Mods/Keybinds/Scripts/main.lua
-; Default: R
-HotReloadKey = R
-
 [EngineVersionOverride]
 ; True if the game is built as Debug, Development, or Test.
 ; Default: false

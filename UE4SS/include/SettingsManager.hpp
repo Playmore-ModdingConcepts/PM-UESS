@@ -6,7 +6,6 @@
 #include <Common.hpp>
 #include <File/File.hpp>
 #include <GUI/GUI.hpp>
-#include <Input/KeyDef.hpp>
 
 namespace RC
 {
@@ -21,7 +20,6 @@ namespace RC
         struct SectionGeneral
         {
             bool EnableHotReloadSystem{};
-            Input::Key HotReloadKey{Input::Key::R};
             bool UseCache{true};
             bool InvalidateCacheIfDLLDiffers{true};
             bool EnableDebugKeyBindings{false};

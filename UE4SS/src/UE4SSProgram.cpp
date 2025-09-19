@@ -53,8 +53,6 @@
 #include <Unreal/UScriptStruct.hpp>
 #include <Unreal/UnrealInitializer.hpp>
 #include <Unreal/World.hpp>
-#include <Unreal/FWorldContext.hpp>
-#include <Unreal/Engine/UDataTable.hpp>
 #include <UnrealDef.hpp>
 
 #include <polyhook2/PE/IatHook.hpp>
@@ -103,43 +101,31 @@ namespace RC
     {
         Output::send(STR("\n##### MEMBER OFFSETS START #####\n\n"));
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UObjectBase);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UScriptStruct::ICppStructOps);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UStruct);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UScriptStruct);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UClass);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UEnum);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UScriptStruct::ICppStructOps);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FField);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FOutputDevice);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FEnumProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UStruct);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UFunction);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UField);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FField);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FProperty);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FNumericProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UWorld);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UClass);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UEnum);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FObjectPropertyBase);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FDelegateProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FMulticastDelegateProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FSetProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FStructProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FArrayProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FMapProperty);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FSetProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FBoolProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FByteProperty);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FEnumProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FClassProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FSoftClassProperty);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FDelegateProperty);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FMulticastDelegateProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FInterfaceProperty);
         OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FFieldPathProperty);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FWorldContext);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FOutputDevice);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FArchiveState);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FArchive);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(AActor);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(AGameModeBase);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(AGameMode);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UEngine);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UGameViewportClient);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UPlayer);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(ULocalPlayer);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UWorld);
-        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UDataTable);
         Output::send(STR("\n##### MEMBER OFFSETS END #####\n\n"));
     }
 
@@ -213,26 +199,7 @@ namespace RC
             {
                 m_console_device = &Output::set_default_devices<Output::ConsoleDevice>();
                 m_console_device->set_formatter([](File::StringViewType string) -> File::StringType {
-                    bool use_local_time = true;
-#ifdef _WIN32
-                    if (auto module = GetModuleHandleW(L"ntdll.dll"); module && GetProcAddress(module, "wine_get_version"))
-                    {
-                        use_local_time = false;
-                    }
-#endif
-                    if (use_local_time)
-                    {
-                        static const auto timezone = std::chrono::current_zone();
-                        return fmt::format(STR("[{}] {}"),
-                                           fmt::format(STR("{:%X}"),
-                                                       std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                                                               timezone->to_local(std::chrono::system_clock::now()))),
-                                           string);
-                    }
-                    else
-                    {
-                        return fmt::format(STR("[{}] {}"), fmt::format(STR("{:%X}"), std::chrono::system_clock::now()), string);
-                    }
+                    return fmt::format(STR("[{}] {}"), fmt::format(STR("{:%X}"), std::chrono::system_clock::now()), string);
                 });
                 if (settings_manager.Debug.DebugConsoleVisible)
                 {
@@ -270,21 +237,6 @@ namespace RC
                                              ? STR("")
                                              : (UE4SS_LIB_IS_BETA == 0 ? STR(" Beta #?") : fmt::format(STR(" Beta #{}"), UE4SS_LIB_VERSION_BETA))),
                          ensure_str(UE4SS_LIB_BUILD_GITSHA));
-            bool use_local_time = true;
-#ifdef _WIN32
-            if (auto module = GetModuleHandleW(L"ntdll.dll"); module && GetProcAddress(module, "wine_get_version"))
-            {
-                use_local_time = false;
-            }
-#endif
-            if (use_local_time)
-            {
-                Output::send(STR("Timezone: {}\n"), ensure_str(std::chrono::current_zone()->name()));
-            }
-            else
-            {
-                Output::send(STR("Timezone: UTC (local disabled due to wine)\n"));
-            }
 
 #ifdef __clang__
 #define UE4SS_COMPILER STR("Clang")
@@ -523,26 +475,7 @@ namespace RC
             m_debug_console_device = &Output::set_default_devices<Output::DebugConsoleDevice>();
             Output::set_default_log_level<LogLevel::Normal>();
             m_debug_console_device->set_formatter([](File::StringViewType string) -> File::StringType {
-                bool use_local_time = true;
-#ifdef _WIN32
-                if (auto module = GetModuleHandleW(L"ntdll.dll"); module && GetProcAddress(module, "wine_get_version"))
-                {
-                    use_local_time = false;
-                }
-#endif
-                if (use_local_time)
-                {
-                    static const auto timezone = std::chrono::current_zone();
-                    return fmt::format(STR("[{}] {}"),
-                                       fmt::format(STR("{:%X}"),
-                                                   std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                                                           timezone->to_local(std::chrono::system_clock::now()))),
-                                       string);
-                }
-                else
-                {
-                    return fmt::format(STR("[{}] {}"), fmt::format(STR("{:%X}"), std::chrono::system_clock::now()), string);
-                }
+                return fmt::format(STR("[{}] {}"), fmt::format(STR("{:%X}"), std::chrono::system_clock::now()), string);
             });
 
             if (AllocConsole())
@@ -833,13 +766,6 @@ namespace RC
                     Unreal::ULocalPlayer::VTableLayoutMap.emplace(item, offset);
                 });
 
-                Output::send<Color::Blue>(STR("UDataTable\n"));
-                retrieve_vtable_layout_from_ini(STR("UDataTable"), [&](uint32_t index, File::StringType& item) {
-                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size, uplayer_size);
-                    Output::send(STR("UDataTable::{} = 0x{:X}\n"), item, offset);
-                    Unreal::UDataTable::VTableLayoutMap.emplace(item, offset);
-                });
-
                 file.close();
             }
         });
@@ -859,19 +785,6 @@ namespace RC
         // Apply Debug Build setting from settings file only for now.
         Unreal::Version::DebugBuild = settings_manager.EngineVersionOverride.DebugBuild;
         Output::send<LogLevel::Warning>(STR("DebugGame Setting Enabled? {}\n"), Unreal::Version::DebugBuild);
-        // Scan a single time while the game thread is locked after UE4SS is attached.
-        Unreal::UnrealInitializer::PreInitialize(config);
-        try
-        {
-            Unreal::UnrealInitializer::ScanGame();
-        }
-        catch (std::runtime_error&)
-        {
-            // No work to be done here. Error is non-fatal, just let the 'Initialize' function take it from here.
-        }
-        cpp_mods_done_loading.store(true);
-        cpp_mods_done_loading.notify_one();
-        // Continuous scanning, and finish initializing after the game thread is unlocked.
         Unreal::UnrealInitializer::Initialize(config);
 
         bool can_create_custom_events{true};
@@ -1015,7 +928,7 @@ namespace RC
             ObjectDumper::init();
             if (settings_manager.General.EnableHotReloadSystem)
             {
-                register_keydown_event(settings_manager.General.HotReloadKey, {Input::ModifierKey::CONTROL}, [&]() {
+                register_keydown_event(Input::Key::R, {Input::ModifierKey::CONTROL}, [&]() {
                     TRY([&] {
                         reinstall_mods();
                     });
@@ -1153,7 +1066,6 @@ namespace RC
         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("UInt64Property")).GetComparisonIndex(), &LuaType::push_uint64property);
         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("StructProperty")).GetComparisonIndex(), &LuaType::push_structproperty);
         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("ArrayProperty")).GetComparisonIndex(), &LuaType::push_arrayproperty);
-        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("SetProperty")).GetComparisonIndex(), &LuaType::push_setproperty);
         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("MapProperty")).GetComparisonIndex(), &LuaType::push_mapproperty);
         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("FloatProperty")).GetComparisonIndex(), &LuaType::push_floatproperty);
         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("DoubleProperty")).GetComparisonIndex(), &LuaType::push_doubleproperty);
@@ -1324,22 +1236,7 @@ namespace RC
         else
         {
             // 'mods.txt' exists, lets parse it
-
-            // First, check for BOM using a byte stream
-            std::ifstream bom_check(enabled_mods_file, std::ios::binary);
-            char bom[3] = {0};
-            bom_check.read(bom, 3);
-            bool has_bom = (bom[0] == '\xEF' && bom[1] == '\xBB' && bom[2] == '\xBF');
-            bom_check.close();
-
-            // Now open the actual stream
             StreamIType mods_stream{enabled_mods_file};
-
-            // If BOM was detected, skip the first "character" (which will be the BOM interpreted as a wide char)
-            if (has_bom) {
-                wchar_t discard;
-                mods_stream.get(discard);
-            }
 
             StringType current_line;
             while (std::getline(mods_stream, current_line))

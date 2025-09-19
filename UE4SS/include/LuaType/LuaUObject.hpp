@@ -349,17 +349,6 @@ namespace RC::LuaType
     RC_UE4SS_API auto construct_uclass(const LuaMadeSimple::Lua&) -> void;
     RC_UE4SS_API auto construct_xproperty(const LuaMadeSimple::Lua&, Unreal::FProperty* property) -> void;
 
-    auto convert_lua_table_to_struct(const LuaMadeSimple::Lua& lua,
-                                     Unreal::UScriptStruct* script_struct,
-                                     void* data,
-                                     int table_index,
-                                     Unreal::UObject* base = nullptr) -> void;
-    auto convert_struct_to_lua_table(const LuaMadeSimple::Lua& lua,
-                                     Unreal::UScriptStruct* script_struct,
-                                     void* data,
-                                     bool create_new_table = true,
-                                     Unreal::UObject* base = nullptr) -> void;
-
     // Push to Lua -> START
     RC_UE4SS_API auto push_unhandledproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_objectproperty(const PusherParams&) -> void;
@@ -374,7 +363,6 @@ namespace RC::LuaType
     RC_UE4SS_API auto push_uint64property(const PusherParams&) -> void;
     RC_UE4SS_API auto push_structproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_arrayproperty(const PusherParams&) -> void;
-    RC_UE4SS_API auto push_setproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_mapproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_floatproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_doubleproperty(const PusherParams&) -> void;
@@ -851,11 +839,6 @@ Overloads:
             table.add_pair("get", [](const LuaMadeSimple::Lua& lua) -> int {
                 prepare_to_handle(Operation::Get, lua);
                 return 1;
-            });
-
-            table.add_pair("Set", [](const LuaMadeSimple::Lua& lua) -> int {
-                prepare_to_handle(Operation::Set, lua);
-                return 0;
             });
 
             table.add_pair("set", [](const LuaMadeSimple::Lua& lua) -> int {

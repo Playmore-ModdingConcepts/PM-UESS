@@ -16,7 +16,7 @@
 #include <ImageHlp.h>
 #include <tchar.h>
 #include <Helpers/String.hpp>
-#include <Helpers/SysError.hpp>
+#include <Helpers/Win32Error.hpp>
 
 using namespace RC;
 namespace fs = std::filesystem;
@@ -51,7 +51,7 @@ std::vector<ExportFunction> DumpExports(const fs::path& dll_path)
 
     if (export_directory == nullptr)
     {
-        auto err_msg = to_string(SysError(GetLastError()));
+        auto err_msg = to_string(Win32Error(GetLastError()));
         cerr << std::format("Failed to get export directory, reason: {}", err_msg) << '\n';
         return {};
     }
