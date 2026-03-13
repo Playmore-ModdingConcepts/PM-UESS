@@ -4,8 +4,7 @@
 #include <LuaType/LuaUObject.hpp>
 #pragma warning(disable : 4005)
 #include <DynamicOutput/DynamicOutput.hpp>
-#include <Unreal/Property/FArrayProperty.hpp>
-#include <Unreal/Property/NumericPropertyTypes.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #pragma warning(default : 4005)
 
 namespace RC::LuaType
@@ -150,10 +149,24 @@ namespace RC::LuaType
                                                      .property = lua_object.m_inner_property};
                     StaticState::m_property_value_pushers[name_comparison_index](pusher_params);
 
-                    // Call function passing index & the element
+                    // Call function passing index & the element, expecting 1 return value
                     // The element is read-only for all trivial types
                     // The element is writable if it's a UObject
-                    lua.call_function(2, 0);
+                    lua.call_function(2, 1);
+
+                    // We explicitly specify index 2 because we duplicated the function earlier and that's located at index 1.
+                    if (lua.is_bool(2) && lua.get_bool(2))
+                    {
+                        break;
+                    }
+                    else
+                    {
+                        // There's a 'nil' on the stack because we told Lua that we expect a return value.
+                        // Lua will put 'nil' on the stack if the Lua function doesn't explicitly return anything.
+                        // We discard the 'nil' here, otherwise the Lua stack is corrupted on the next iteration of the 'ForEach' loop.
+                        // We explicitly specify index 2 because we duplicated the function earlier and that's located at index 1.
+                        lua.discard_value(2);
+                    }
                 }
             }
             else

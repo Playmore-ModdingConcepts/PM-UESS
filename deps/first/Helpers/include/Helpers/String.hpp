@@ -191,16 +191,16 @@ namespace RC
 
     auto inline to_wstring(std::string_view input) -> std::wstring
     {
+#if __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #ifdef PLATFORM_WINDOWS
 #pragma warning(disable : 4996)
         static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter{};
         return converter.from_bytes(input.data(), input.data() + input.length());
 #pragma warning(default : 4996)
 #else
-#if __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
         static std::wstring_convert<std::codecvt_utf8<wchar_t>> converter{};
         return converter.from_bytes(input.data(), input.data() + input.length());
 #endif
@@ -498,6 +498,13 @@ namespace RC
         }
     }
 
+    // Forward declaration for ensure_str_as
+    template <typename TargetCharT, typename T>
+    auto inline ensure_str_as(T&& arg) -> std::basic_string<TargetCharT>
+    {
+        return to_charT<TargetCharT>(std::forward<T>(arg));
+    }
+
     // Ensure that a string is compatible with UE4SS, converting it if neccessary
     template <typename T>
     auto inline ensure_str(T&& arg) /* -> StringType */
@@ -505,16 +512,29 @@ namespace RC
         return ensure_str_as<CharType>(std::forward<T>(arg)); // CharType is the project's native char type
     }
 
-    template <typename TargetCharT, typename T>
-    auto inline ensure_str_as(T&& arg) -> std::basic_string<TargetCharT>
-    {
-        return to_charT<TargetCharT>(std::forward<T>(arg));
-    }
-
     template <typename T>
     auto inline to_utf8_string(T&& arg) -> std::string
     {
         return ensure_str_as<char>(std::forward<T>(arg));
+    }
+
+    template<typename CharT>
+    auto inline to_lower_case(std::basic_string_view<CharT> input) -> std::basic_string<CharT>
+    {
+        static auto locale = std::locale();
+        std::basic_string<CharT> out;
+        out.reserve(input.size());
+        for (const auto& c : input)
+        {
+            out.push_back(std::tolower(c, locale));
+        }
+        return out;
+    }
+
+    template<typename CharT>
+    auto inline to_lower_case(const std::basic_string<CharT>& input) -> std::basic_string<CharT>
+    {
+        return to_lower_case(std::basic_string_view<CharT>(input));
     }
 
     // You can add more to_* function if needed

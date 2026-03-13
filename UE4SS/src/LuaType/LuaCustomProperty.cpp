@@ -2,8 +2,8 @@
 
 #include <LuaType/LuaCustomProperty.hpp>
 #pragma warning(disable : 4005)
-#include <Unreal/FProperty.hpp>
-#include <Unreal/UClass.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/UnrealVersion.hpp>
 #include <UnrealCustom/CustomProperty.hpp>
 #pragma warning(default : 4005)
@@ -26,7 +26,7 @@ namespace RC::LuaType
         properties.clear();
     }
 
-    auto LuaCustomProperty::PropertyList::find_or_nullptr(Unreal::UObject* base, StringType property_name) -> Unreal::FProperty*
+    auto LuaCustomProperty::PropertyList::for_each(Unreal::UObject* base, const ForEachCallable& callable) -> bool
     {
         Unreal::FProperty* custom_property_found{};
 
@@ -43,12 +43,20 @@ namespace RC::LuaType
                 owner_or_outer = owner.ToField();
             }
 
-            Unreal::UStruct* ptr = base->GetClassPrivate();
+            Unreal::UStruct* ptr{};
+            if (base->IsA<Unreal::UStruct>())
+            {
+                ptr = static_cast<Unreal::UStruct*>(base);
+            }
+            else
+            {
+                ptr = base->GetClassPrivate();
+            }
             bool class_matches = ptr == owner_or_outer;
 
             if (!class_matches)
             {
-                for (Unreal::UStruct* super_struct : ptr->ForEachSuperStruct())
+                for (Unreal::UStruct* super_struct : Unreal::TSuperStructRange(ptr))
                 {
                     if (super_struct == owner_or_outer)
                     {
@@ -58,13 +66,27 @@ namespace RC::LuaType
                 }
             }
 
-            if (class_matches && property_name == property_item.m_name)
+            if (class_matches && !callable(property_item))
             {
-                // Compare name here
-                custom_property_found = property_item.m_property.get();
-                break;
+                return false;
             }
         }
+
+        return true;
+    }
+
+    auto LuaCustomProperty::PropertyList::find_or_nullptr(Unreal::UObject* base, StringType property_name) -> Unreal::FProperty*
+    {
+        Unreal::FProperty* custom_property_found{};
+
+        for_each(base, [&](LuaCustomProperty const& property) {
+            bool match = property.m_name == property_name;
+            if (match)
+            {
+                custom_property_found = property.m_property.get();
+            }
+            return !match;
+        });
 
         return custom_property_found;
     }

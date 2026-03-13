@@ -13,6 +13,7 @@
 #include <Unreal/Signatures.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectArray.hpp>
+#include <Unreal/UEngine.hpp>
 #include <Unreal/UnrealInitializer.hpp>
 
 #include <Helpers/String.hpp>
@@ -41,8 +42,24 @@ namespace RC
         lua.register_function("print", LuaLibrary::global_print);
         lua.register_function("DerefToInt32", LuaLibrary::deref_to_int32);
         lua.register_function("dereftoint32", LuaLibrary::deref_to_int32);
+        lua.register_function("LoadExport", LuaLibrary::load_export);
+        lua.register_function("loadexport", LuaLibrary::load_export);
 
         lua.execute_file(script_file_path_and_name.string());
+
+        if (lua.get_stack_size() > 0)
+        {
+            if (lua.is_integer())
+            {
+                auto found_address = reinterpret_cast<void*>(lua.get_integer());
+                match_found_func(found_address);
+                return;
+            }
+            else if (lua.is_nil())
+            {
+                throw std::runtime_error{fmt::format("Lua file returned nil (symbol not found): {}", to_string(script_file_path_and_name))};
+            }
+        }
 
         constexpr const char* global_register_func_name = "Register";
         constexpr const char* global_on_match_found_func_name = "OnMatchFound";
@@ -205,8 +222,7 @@ namespace RC
                         signature_containers,
                         [](void* address) {
                             Output::send(STR("GMalloc address: {} <- Lua Script\n"), address);
-                            Unreal::FMalloc::UnrealStaticGMalloc = static_cast<Unreal::FMalloc**>(address);
-                            Unreal::GMalloc = *Unreal::FMalloc::UnrealStaticGMalloc;
+                            Unreal::GMalloc = static_cast<Unreal::FMalloc**>(address);
                             return DidLuaScanSucceed::Yes;
                         },
                         [&](DidLuaScanSucceed did_lua_scan_succeed) {
@@ -238,47 +254,6 @@ namespace RC
                             {
                                 scan_result.Errors.emplace_back("Was unable to find AOB for 'StaticConstructObject' via "
                                                                 "Lua script");
-                            }
-                        });
-            };
-        }
-
-        auto lua_ftc_scan_script = working_directory / "UE4SS_Signatures/FText_Constructor.lua";
-        if (std::filesystem::exists(lua_ftc_scan_script))
-        {
-            config.ScanOverrides.ftext_constructor = [lua_ftc_scan_script](std::vector<SignatureContainer>& signature_containers,
-                                                                           Unreal::Signatures::ScanResult& scan_result) mutable {
-                scan_from_lua_script(
-                        lua_ftc_scan_script,
-                        signature_containers,
-                        [&scan_result](void* address) {
-                            Unreal::FText text{};
-                            SEH_TRY({ text = Unreal::FText(STR("bCanBeDamaged"), address); })
-                            SEH_EXCEPT({ Output::send<LogLevel::Error>(STR("Error: Crashed calling FText constructor.\n")); });
-
-                            DidLuaScanSucceed did_succeed{};
-                            SEH_TRY({
-                                if (text == STR("bCanBeDamaged"))
-                                {
-                                    Output::send(STR("FText::FText address: {} <- Lua Script\n"), address);
-                                    Unreal::FText::ConstructorInternal.assign_address(address);
-                                    did_succeed = DidLuaScanSucceed::Yes;
-                                }
-                                else
-                                {
-                                    scan_result.Errors.emplace_back("Lua script 'FText_Constructor.lua' did not return a "
-                                                                    "valid address for FText::FText.");
-                                    did_succeed = DidLuaScanSucceed::No;
-                                }
-                            })
-                            SEH_EXCEPT({ Output::send<LogLevel::Error>(STR("Error: Crashed calling FText::ToString.\n")); })
-                            return did_succeed;
-                        },
-                        [&scan_result]([[maybe_unused]] DidLuaScanSucceed did_lua_scan_succeed) {
-                            if (!Unreal::FText::ConstructorInternal.get_function_address())
-                            {
-                                scan_result.Errors.emplace_back("Lua script 'FText_Constructor.lua' did not return a "
-                                                                "valid address for FText::FText.");
                             }
                         });
             };
@@ -422,6 +397,32 @@ namespace RC
                                     {
                                         scan_result.Errors.emplace_back("Was unable to find AOB for "
                                                                         "'CallFunctionByNameWithArguments' via Lua script");
+                                    }
+                                });
+                    };
+        }
+
+        auto lua_gameengine_tick_scan_script = working_directory / "UE4SS_Signatures/GameEngineTick.lua";
+        if (std::filesystem::exists(lua_gameengine_tick_scan_script))
+        {
+            config.ScanOverrides.gameengine_tick =
+                    [lua_gameengine_tick_scan_script](std::vector<SignatureContainer>& signature_containers,
+                                                                           Unreal::Signatures::ScanResult& scan_result) mutable {
+                        scan_from_lua_script(
+                                lua_gameengine_tick_scan_script,
+                                signature_containers,
+                                [](void* address) {
+                                    Output::send(STR("GameEngine::Tick address: {} "
+                                                     "<- Lua Script\n"),
+                                                 address);
+                                    Unreal::UEngine::TickInternal.assign_address(address);
+                                    return DidLuaScanSucceed::Yes;
+                                },
+                                [&](DidLuaScanSucceed did_lua_scan_succeed) {
+                                    if (did_lua_scan_succeed == DidLuaScanSucceed::No)
+                                    {
+                                        scan_result.Errors.emplace_back("Was unable to find AOB for "
+                                                                        "'GameEngine::Tick' via Lua script");
                                     }
                                 });
                     };

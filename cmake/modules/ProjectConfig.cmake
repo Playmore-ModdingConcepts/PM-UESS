@@ -5,6 +5,9 @@
 include(Utilities)  # For string manipulation functions
 
 # Project structure configuration
+# NOTE: The build mode lists below are referenced by CI workflows for dynamic matrix generation.
+# Keep these declarations on single lines to enable automated parsing via grep/regex.
+# Format: set(VAR_NAME "val1" "val2" ... CACHE STRING "description")
 set(UE4SS_PROJECTS "UE4SS" "UVTD" CACHE STRING "List of main project targets")
 set(UE4SS_TARGET_TYPES "Game" "CasePreserving" "LessEqual421" CACHE STRING "UE4-style target types")
 set(UE4SS_CONFIGURATION_TYPES "Debug" "Dev" "Shipping" "Test" CACHE STRING "UE4-style configuration types")
@@ -19,7 +22,8 @@ option(UE4SS_SUPPRESS_THIRD_PARTY_WARNINGS "Suppress warnings from third-party l
 option(UE4SS_VERSION_CHECK "Enable compiler version checking" ON)
 
 # Profiler configuration
-set(RC_PROFILER_FLAVOR "Tracy" CACHE STRING "Select profiler: Tracy, Superluminal, or None")
+# Default to None - users can opt-in to Tracy or Superluminal if needed
+set(RC_PROFILER_FLAVOR "None" CACHE STRING "Select profiler: Tracy, Superluminal, or None")
 set_property(CACHE RC_PROFILER_FLAVOR PROPERTY STRINGS Tracy Superluminal None)
 
 # Proxy configuration
@@ -28,7 +32,7 @@ set(UE4SS_PROXY_PATH "" CACHE FILEPATH "Path to DLL for proxy generation (empty 
 # Target type definitions (UE4-style)
 set(UE4SS_Game_DEFINITIONS UE_GAME)
 set(UE4SS_CasePreserving_DEFINITIONS ${UE4SS_Game_DEFINITIONS} WITH_CASE_PRESERVING_NAME)
-set(UE4SS_LessEqual421_DEFINITIONS ${UE4SS_Game_DEFINITIONS} FNAME_ALIGN8)
+set(UE4SS_LessEqual421_DEFINITIONS ${UE4SS_Game_DEFINITIONS} FNAME_ALIGN8 LESSEQUAL421)
 
 # Target type flags (can be customized per target)
 set(UE4SS_Game_FLAGS "")
@@ -37,9 +41,9 @@ set(UE4SS_LessEqual421_FLAGS ${UE4SS_Game_FLAGS})
 
 # Configuration type definitions (UE4-style)
 set(UE4SS_Debug_DEFINITIONS UE_BUILD_DEBUG)
-set(UE4SS_Dev_DEFINITIONS UE_BUILD_DEVELOPMENT STATS)
+set(UE4SS_Dev_DEFINITIONS UE_BUILD_DEVELOPMENT STATS UE4SS_PROFILERS)
 set(UE4SS_Shipping_DEFINITIONS UE_BUILD_SHIPPING)
-set(UE4SS_Test_DEFINITIONS UE_BUILD_TEST STATS)
+set(UE4SS_Test_DEFINITIONS UE_BUILD_TEST STATS UE4SS_PROFILERS)
 
 # Platform definitions (UE4-style)
 set(UE4SS_Win64_DEFINITIONS PLATFORM_WINDOWS PLATFORM_MICROSOFT OVERRIDE_PLATFORM_HEADER_NAME=Windows UBT_COMPILED_PLATFORM=Win64)
@@ -71,7 +75,12 @@ function(ue4ss_initialize_project)
     
     # Unicode support
     list(APPEND TARGET_COMPILE_DEFINITIONS _UNICODE UNICODE)
-    
+
+    # Windows version targeting (Windows 10 and above)
+    if(WIN32)
+        list(APPEND TARGET_COMPILE_DEFINITIONS _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    endif()
+
     # Export to parent scope
     set(TARGET_COMPILE_DEFINITIONS ${TARGET_COMPILE_DEFINITIONS} PARENT_SCOPE)
     
@@ -113,14 +122,40 @@ function(ue4ss_initialize_compiler_flags)
     # Convert standard CMake flags to our format
     # Uses stringToList() from cmake/modules/Utilities.cmake
     stringToList(DEBUG_FLAGS_LIST "${CMAKE_CXX_FLAGS_DEBUG}")
-    set(Debug_FLAGS ${DEBUG_FLAGS_LIST} PARENT_SCOPE)
+    
+    # Append to existing Debug_FLAGS if already set
+    if(DEFINED Debug_FLAGS)
+        list(APPEND Debug_FLAGS ${DEBUG_FLAGS_LIST})
+    else()
+        set(Debug_FLAGS ${DEBUG_FLAGS_LIST})
+    endif()
+    set(Debug_FLAGS ${Debug_FLAGS} PARENT_SCOPE)
     
     # Dev configuration uses debug flags without optimization
-    set(Dev_FLAGS ${DEBUG_FLAGS_LIST} PARENT_SCOPE)
+    if(DEFINED Dev_FLAGS)
+        list(APPEND Dev_FLAGS ${DEBUG_FLAGS_LIST})
+    else()
+        set(Dev_FLAGS ${DEBUG_FLAGS_LIST})
+    endif()
+    set(Dev_FLAGS ${Dev_FLAGS} PARENT_SCOPE)
     
     stringToList(RELEASE_FLAGS_LIST "${CMAKE_CXX_FLAGS_RELEASE}")
-    set(Shipping_FLAGS ${RELEASE_FLAGS_LIST} PARENT_SCOPE)
+    
+    # Append to existing Shipping_FLAGS if already set (preserves /Zi from msvc-compatible.cmake)
+    if(DEFINED Shipping_FLAGS)
+        list(APPEND Shipping_FLAGS ${RELEASE_FLAGS_LIST})
+    else()
+        set(Shipping_FLAGS ${RELEASE_FLAGS_LIST})
+    endif()
+    set(Shipping_FLAGS ${Shipping_FLAGS} PARENT_SCOPE)
     
     stringToList(RELWITHDEBINFO_FLAGS_LIST "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-    set(Test_FLAGS ${RELWITHDEBINFO_FLAGS_LIST} PARENT_SCOPE)
+    
+    # Append to existing Test_FLAGS if already set
+    if(DEFINED Test_FLAGS)
+        list(APPEND Test_FLAGS ${RELWITHDEBINFO_FLAGS_LIST})
+    else()
+        set(Test_FLAGS ${RELWITHDEBINFO_FLAGS_LIST})
+    endif()
+    set(Test_FLAGS ${Test_FLAGS} PARENT_SCOPE)
 endfunction()

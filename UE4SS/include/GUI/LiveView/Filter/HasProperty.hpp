@@ -1,7 +1,7 @@
 #pragma once
 
 #include <GUI/LiveView/Filter/SearchFilter.hpp>
-#include <Unreal/UClass.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 
 namespace RC::GUI::Filter
 {
@@ -14,10 +14,44 @@ namespace RC::GUI::Filter
 
         static auto post_eval(UObject* object) -> bool
         {
-            for (const auto& property : list_properties)
+            for (const auto& property_string : list_properties)
             {
-                if (!property.empty() && !object->GetPropertyByNameInChain(FromCharTypePtr<TCHAR>(property.c_str()))) return true;
+                if (property_string.empty())
+                {
+                    continue;
+                }
+                const auto property_name = FName(FromCharTypePtr<TCHAR>(property_string.c_str()));
+                const auto as_struct = object->IsA<UStruct>() ? static_cast<UStruct*>(object) : object->GetClassPrivate();
+                FProperty* found_property{};
+                for (FProperty* property : TFieldRange<FProperty>(as_struct, EFieldIterationFlags::IncludeDeprecated))
+                {
+                    if (property->GetFName().Equals(property_name))
+                    {
+                        found_property = property;
+                        break;
+                    }
+                }
+                for (UStruct* super_struct : TSuperStructRange(as_struct))
+                {
+                    for (FProperty* property : TFieldRange<FProperty>(super_struct, EFieldIterationFlags::IncludeDeprecated))
+                    {
+                        if (property->GetFName().Equals(property_name))
+                        {
+                            found_property = property;
+                            break;
+                        }
+                    }
+                }
+                if (!found_property)
+                {
+                    return true;
+                }
+                else
+                {
+                    highlight(found_property);
+                }
             }
+
             return false;
         }
     };

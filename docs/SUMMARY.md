@@ -19,6 +19,7 @@
   - [Table Definitions]()
     - [Key](./lua-api/table-definitions/key.md)
     - [ModifierKey](./lua-api/table-definitions/modifierkey.md)
+    - [EGameThreadMethod](./lua-api/table-definitions/egamethreadmethod.md)
     - [PropertyTypes](./lua-api/table-definitions/propertytypes.md)
     - [OffsetInternalInfo](./lua-api/table-definitions/offsetinternalinfo.md)
     - [ArrayPropertyInfo](./lua-api/table-definitions/arraypropertyinfo.md)
@@ -37,14 +38,21 @@
     - [UScriptStruct](./lua-api/classes/uscriptstruct.md)
     - [UClass](./lua-api/classes/uclass.md)
     - [UFunction](./lua-api/classes/ufunction.md)
+    - [DelegateProperty](./lua-api/classes/delegateproperty.md)
+    - [MulticastDelegateProperty](./lua-api/classes/multicastdelegateproperty.md)
+    - [MulticastSpareDelegateProperty](./lua-api/classes/multicastsparsedelegateproperty.md)
     - [UEnum](./lua-api/classes/uenum.md)
     - [AActor](./lua-api/classes/aactor.md)
     - [FString](./lua-api/classes/fstring.md)
+    - [FAnsiString](./lua-api/classes/fansistring.md)
+    - [FUtf8String](./lua-api/classes/futf8string.md)
     - [FName](./lua-api/classes/fname.md)
     - [FText](./lua-api/classes/ftext.md)
     - [FieldClass](./lua-api/classes/fieldclass.md)
     - [TArray](./lua-api/classes/tarray.md)
     - [TMap](./lua-api/classes/tmap.md)
+    - [TSet](./lua-api/classes/tset.md)
+    - [UDataTable](./lua-api/classes/udatatable.md)
     - [RemoteUnrealParam](./lua-api/classes/remoteunrealparam.md)
     - [LocalUnrealParam](./lua-api/classes/localunrealparam.md)
     - [Property](./lua-api/classes/property.md)
@@ -72,6 +80,7 @@
     - [NotifyOnNewObject](./lua-api/global-functions/notifyonnewobject.md)
     - [ExecuteWithDelay](./lua-api/global-functions/executewithdelay.md)
     - [ExecuteInGameThread](./lua-api/global-functions/executeingamethread.md)
+    - [Delayed Actions](./lua-api/global-functions/delayedactions.md)
     - [ExecuteAsync](./lua-api/global-functions/executeasync.md)
     - [LoopAsync](./lua-api/global-functions/loopasync.md)
     - [LoadAsset](./lua-api/global-functions/loadasset.md)
@@ -100,6 +109,8 @@
     - [DumpStaticMeshes](./lua-api/global-functions/dumpstaticmeshes.md)
     - [DumpAllActors](./lua-api/global-functions/dumpallactors.md)
     - [DumpUSMAP](./lua-api/global-functions/dumpusmap.md)
+    - [LoadExport](./lua-api/global-functions/loadexport.md)
+    - [Mod Management](./lua-api/global-functions/modmanagement.md)
   - [Examples](./lua-api/examples.md)
   - [Creating a Lua Mod](./guides/creating-a-lua-mod.md)
   - [Using Custom Lua Bindings](./guides/using-custom-lua-bindings.md)
@@ -109,6 +120,7 @@
   - [Creating a C++ Mod](./guides/creating-a-c++-mod.md)
   - [Installing a C++ Mod](./guides/installing-a-c++-mod.md)
   - [GUI tabs with a C++ Mod](./guides/creating-gui-tabs-with-c++-mod.md)
+  - [Accessing UE properties with a C++ mod](./guides/accessing-ue-properties-c++.md)
 
 ## Guides
 
@@ -116,12 +128,7 @@
   - [Fixing missing AOBs](./guides/fixing-compatibility-problems.md)
   - [Fixing missing AOBs (Advanced)](./guides/fixing-compatibility-problems-advanced.md)
   - [Generating UHT headers](./guides/generating-uht-compatible-headers.md)
-  - [Creating a C++ Mod](./guides/creating-a-c++-mod.md)
-  - [Installing a C++ Mod](./guides/installing-a-c++-mod.md)
-  - [GUI tabs with a C++ Mod](./guides/creating-gui-tabs-with-c++-mod.md)
-  - [Accessing UE properties with a C++ mod](./guides/accessing-ue-properties-c++.md)
-  - [Creating a Lua Mod](./guides/creating-a-lua-mod.md)
-  - [Using Custom Lua Bindings](./guides/using-custom-lua-bindings.md)
+
 
 ## Misc
 

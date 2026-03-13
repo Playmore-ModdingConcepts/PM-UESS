@@ -1,6 +1,7 @@
 #include <Helpers/String.hpp>
 #include <IniParser/Ini.hpp>
 #include <SettingsManager.hpp>
+#include <UE4SSProgram.hpp>
 
 #define REGISTER_STRING_SETTING(member_var, section_name, key)                                                                                                 \
     try                                                                                                                                                        \
@@ -50,13 +51,63 @@ namespace RC
         constexpr static File::CharType section_overrides[] = STR("Overrides");
         REGISTER_STRING_SETTING(Overrides.ModsFolderPath, section_overrides, ModsFolderPath)
 
+        auto mods_paths_list = parser.get_list(section_overrides);
+        mods_paths_list.for_each(STR("ModsFolderPaths"), [](const StringType& key, const Ini::Value& value) {
+            if (key.starts_with(STR('+')))
+            {
+                UE4SSProgram::get_program().add_mods_directory(value.get_string_value());
+            }
+            else if (key.starts_with(STR('-')))
+            {
+                UE4SSProgram::get_program().remove_mods_directory(value.get_string_value());
+            }
+        });
+
+        REGISTER_STRING_SETTING(Overrides.ControllingModsTxt, section_overrides, ControllingModsTxt)
+
         constexpr static File::CharType section_general[] = STR("General");
         REGISTER_BOOL_SETTING(General.EnableHotReloadSystem, section_general, EnableHotReloadSystem)
+        StringType hot_reload_key{};
+        REGISTER_STRING_SETTING(hot_reload_key, section_general, HotReloadKey)
+        if (!hot_reload_key.empty())
+        {
+            try
+            {
+                General.HotReloadKey = Input::string_to_key(hot_reload_key);
+            }
+            catch (...)
+            {
+                // Note that this happens too early to be sent to the log file or the GUI, so it will only appear in the native console on Win32, or the terminal on Linux.
+                throw std::runtime_error{fmt::format("Invalid value for 'General.HotReloadKey': {}\n", to_string(hot_reload_key))};
+            }
+        }
         REGISTER_BOOL_SETTING(General.UseCache, section_general, UseCache)
         REGISTER_BOOL_SETTING(General.InvalidateCacheIfDLLDiffers, section_general, InvalidateCacheIfDLLDiffers)
         REGISTER_BOOL_SETTING(General.EnableDebugKeyBindings, section_general, EnableDebugKeyBindings)
         REGISTER_INT64_SETTING(General.SecondsToScanBeforeGivingUp, section_general, SecondsToScanBeforeGivingUp)
         REGISTER_BOOL_SETTING(General.UseUObjectArrayCache, section_general, bUseUObjectArrayCache)
+        REGISTER_BOOL_SETTING(General.DoEarlyScan, section_general, DoEarlyScan)
+        REGISTER_BOOL_SETTING(General.SearchByAddress, section_general, bEnableSeachByMemoryAddress)
+        StringType default_exec_method_string{};
+        REGISTER_STRING_SETTING(default_exec_method_string, section_general, DefaultExecuteInGameThreadMethod)
+        if (String::iequal(default_exec_method_string, STR("ProcessEvent")))
+        {
+            General.DefaultExecuteInGameThreadMethod = GameThreadExecutionMethod::ProcessEvent;
+        }
+        else if (String::iequal(default_exec_method_string, STR("EngineTick")))
+        {
+            General.DefaultExecuteInGameThreadMethod = GameThreadExecutionMethod::EngineTick;
+        }
+        StringType default_fname_to_string_method{};
+        REGISTER_STRING_SETTING(default_fname_to_string_method, section_general, DefaultFNameToStringMethod)
+        if (String::iequal(default_fname_to_string_method, STR("Scan")))
+        {
+            General.DefaultFNameToStringMethod = Unreal::UnrealInitializer::FNameToStringMethod::Scan;
+        }
+        else if (String::iequal(default_fname_to_string_method, STR("Conv_NameToString")))
+        {
+            General.DefaultFNameToStringMethod = Unreal::UnrealInitializer::FNameToStringMethod::Conv_NameToString;
+        }
 
         constexpr static File::CharType section_engine_version_override[] = STR("EngineVersionOverride");
         REGISTER_INT64_SETTING(EngineVersionOverride.MajorVersion, section_engine_version_override, MajorVersion)
@@ -132,7 +183,20 @@ namespace RC
         REGISTER_BOOL_SETTING(Hooks.HookLocalPlayerExec, section_hooks, HookLocalPlayerExec)
         REGISTER_BOOL_SETTING(Hooks.HookAActorTick, section_hooks, HookAActorTick)
         REGISTER_BOOL_SETTING(Hooks.HookEngineTick, section_hooks, HookEngineTick)
+        StringType engine_tick_resolve_method_string{};
+        REGISTER_STRING_SETTING(engine_tick_resolve_method_string, section_hooks, EngineTickResolveMethod)
+        if (String::iequal(engine_tick_resolve_method_string, STR("VTable")))
+        {
+            Hooks.EngineTickResolveMethod = Unreal::UnrealInitializer::FunctionResolveMethod::VTable;
+        }
+        else if (String::iequal(engine_tick_resolve_method_string, STR("Scan")))
+        {
+            Hooks.EngineTickResolveMethod = Unreal::UnrealInitializer::FunctionResolveMethod::Scan;
+        }
         REGISTER_BOOL_SETTING(Hooks.HookGameViewportClientTick, section_hooks, HookGameViewportClientTick)
+        REGISTER_BOOL_SETTING(Hooks.HookUObjectProcessEvent, section_hooks, HookUObjectProcessEvent)
+        REGISTER_BOOL_SETTING(Hooks.HookProcessConsoleExec, section_hooks, HookProcessConsoleExec)
+        REGISTER_BOOL_SETTING(Hooks.HookUStructLink, section_hooks, HookUStructLink)
         REGISTER_INT64_SETTING(Hooks.FExecVTableOffsetInLocalPlayer, section_hooks, FExecVTableOffsetInLocalPlayer)
 
         constexpr static File::CharType section_experimental_features[] = STR("ExperimentalFeatures");

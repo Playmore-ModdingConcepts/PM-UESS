@@ -46,7 +46,7 @@ Now all you need to do is start your game and UE4SS will automatically be inject
 
 ## Experimental Install
 
-If you want the latest and greatest features and don't mind the potential for more bugs than the main release, you can visit the [experimental part of releases](https://github.com/UE4SS-RE/RE-UE4SS/releases/tag/experimental) which is automatically updated for each commit to the main branch.
+If you want the latest and greatest features and don't mind the potential for more bugs than the main release, you can visit the [experimental part of releases](https://github.com/UE4SS-RE/RE-UE4SS/releases/tag/experimental-latest) which is automatically updated for each commit to the main branch.
 
 There are a lot of older files in the experimental releases, so you will need to look for the latest downloads. You can tell which are the latest by looking at the date of the release.
 
@@ -63,6 +63,33 @@ In your `game executable directory` alongside the `dwmapi.dll`, create a file ca
 For example, possible paths could be:
 - `C:/ue4ss/`
 - `../../Content/Paks`
+
+### Command Line Path Override
+
+You can also specify a custom path to `UE4SS.dll` via a command line argument. This takes priority over the `override.txt` file.
+
+Use the `--ue4ss-path` argument when launching your game:
+
+```
+game.exe --ue4ss-path "C:\custom\path\to\UE4SS.dll"
+```
+
+Both absolute and relative paths are supported. Relative paths are resolved from the `game executable directory`:
+
+```
+game.exe --ue4ss-path "dev\builds\UE4SS.dll"
+```
+
+This is particularly useful for:
+- Developers testing different RE-UE4SS builds without modifying files
+- Quick switching between RE-UE4SS versions
+- Automated testing with different configurations
+
+**Load Priority Order:**
+1. `--ue4ss-path` command line argument (highest priority)
+2. `override.txt` file
+3. `<game executable directory>/ue4ss/UE4SS.dll`
+4. `<game executable directory>/UE4SS.dll` (lowest priority)
 
 ## Manual Injection
 
@@ -111,3 +138,54 @@ Try any of the following:
 * Check that the log file `UE4SS.log` is created in the same folder as the UE4SS main DLL, and that the log file contains fresh timestamps and no errors.
 * Enable the GUI console in `UE4SS-settings.ini` and check that it appears as a separate window (rendered with OpenGL by default).
 * (For developers, if the game is confirmed to be safely debuggable) Check that the UE4SS library is being loaded in a debugger and has its threads spawned in the target game's process and in a reasonable state.
+
+## Configuration
+
+After installation, you can configure RE-UE4SS through the `UE4SS-settings.ini` file.
+
+### Command Line Options
+
+When installed via proxy DLL, RE-UE4SS supports these command line options:
+
+- `--disable-ue4ss` - Temporarily disable RE-UE4SS without uninstalling by launching the game with this argument
+- `--ue4ss-path <path>` - Specify a custom path to UE4SS.dll (absolute or relative). Useful for testing different builds without modifying installation files
+
+### Multiple Mods Directories
+
+You can load mods from multiple directories using the `UE4SS-settings.ini` file:
+
+```ini
+[Overrides]
+; Add additional mods directories with + prefix, remove with - prefix
++ModsFolderPaths = ../SharedMods
++ModsFolderPaths = C:/MyMods
+-ModsFolderPaths = ../SharedMods
+```
+
+INI paths are processed in the order they appear (last entry has highest priority).
+
+Alternatively, use the `UE4SS_MODS_PATHS` environment variable with semicolon-separated paths:
+```
+set UE4SS_MODS_PATHS=C:\SharedMods;D:\GameMods;E:\TestMods
+```
+
+Environment variable paths are processed in reverse order (first entry has highest priority). Both INI and environment variable paths support relative and absolute paths, including symlinks.
+
+### Controlling Mods List
+
+By default, UE4SS parses the `mods.txt` file from each mods directory. You can override this to use a single controlling `mods.txt` file:
+
+```ini
+[Overrides]
+; Path to a specific mods.txt file to use as the controlling mod list.
+; If set, ONLY this mods.txt will be parsed instead of mods.txt from all mod directories.
+; Can be relative to working directory or an absolute path.
+ControllingModsTxt = ../MyModsList/mods.txt
+```
+
+This is useful when:
+- Managing mod load order centrally across multiple mod directories
+- Using a shared configuration for multiple game installations
+- Keeping mod lists in version control separate from mod files
+
+When `ControllingModsTxt` is empty (default), UE4SS will parse `mods.txt` from all configured mod directories.

@@ -37,6 +37,6 @@
     },
     {
         "mod_name": "Keybinds",
-        "mod_enabled": true
+        "mod_enabled": false
     }
 ]

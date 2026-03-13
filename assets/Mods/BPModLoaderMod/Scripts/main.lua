@@ -266,7 +266,7 @@ local function LoadMods(World)
     end
 end
 
-RegisterKeyBind(Key.INS, function()
+RegisterKeyBind(Key.I, {ModifierKey.CONTROL}, function()
     ExecuteInGameThread(function()
         LoadMods(UEHelpers.GetWorld())
     end)

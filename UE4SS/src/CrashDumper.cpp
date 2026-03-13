@@ -7,7 +7,8 @@
 
 #include <polyhook2/PE/IatHook.hpp>
 #include <dbghelp.h>
-#include <Helpers/Win32Error.hpp>
+#include <Helpers/SysError.hpp>
+#include <Helpers/Time.hpp>
 #include <String/StringType.hpp>
 
 namespace fs = std::filesystem;
@@ -25,15 +26,14 @@ namespace RC
 
     LONG WINAPI ExceptionHandler(_EXCEPTION_POINTERS* exception_pointers)
     {
-        const auto now = time_point_cast<seconds>(system_clock::now());
-        const StringType dump_path = fmt::format(STR("{}\\crash_{:%Y_%m_%d_%H_%M_%S}.dmp"), StringType{UE4SSProgram::get_program().get_working_directory()}, now);
+        StringType dump_path = fmt::format(STR("{}\\crash_{}.dmp"), StringType{UE4SSProgram::get_program().get_working_directory()}, get_now_as_string(STR("{:%Y_%m_%d_%H_%M_%S}")));
 
         const HANDLE file =
                 CreateFileW(FromCharTypePtr<wchar_t>(dump_path.c_str()), GENERIC_WRITE, FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
         if (file == INVALID_HANDLE_VALUE)
         {
-            const StringType message = fmt::format(STR("Failed to create crashdump file, reason: {}"), Win32Error(GetLastError()).c_str());
+            const StringType message = fmt::format(STR("Failed to create crashdump file, reason: {}"), SysError(GetLastError()).c_str());
             MessageBoxW(NULL, FromCharTypePtr<wchar_t>(message.c_str()), L"Fatal Error!", MB_OK);
             return EXCEPTION_CONTINUE_SEARCH;
         }
@@ -55,7 +55,7 @@ namespace RC
 
         if (!ok)
         {
-            const StringType message = fmt::format(STR("Failed to write crashdump file, reason: {}"), Win32Error(GetLastError()).c_str());
+            const StringType message = fmt::format(STR("Failed to write crashdump file, reason: {}"), SysError(GetLastError()).c_str());
             MessageBoxW(NULL, FromCharTypePtr<wchar_t>(message.c_str()), L"Fatal Error!", MB_OK);
             return EXCEPTION_CONTINUE_SEARCH;
         }

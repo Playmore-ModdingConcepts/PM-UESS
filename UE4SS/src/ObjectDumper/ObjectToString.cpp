@@ -7,31 +7,13 @@
 #include <UE4SSProgram.hpp>
 
 #pragma warning(disable : 4005)
-#include <Unreal/FProperty.hpp>
-#include <Unreal/Property/FArrayProperty.hpp>
-#include <Unreal/Property/FBoolProperty.hpp>
-#include <Unreal/Property/FClassProperty.hpp>
-#include <Unreal/Property/FDelegateProperty.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Property/FEnumProperty.hpp>
 #include <Unreal/Property/FFieldPathProperty.hpp>
-#include <Unreal/Property/FInterfaceProperty.hpp>
-#include <Unreal/Property/FLazyObjectProperty.hpp>
-#include <Unreal/Property/FMapProperty.hpp>
-#include <Unreal/Property/FMulticastDelegateProperty.hpp>
-#include <Unreal/Property/FMulticastInlineDelegateProperty.hpp>
-#include <Unreal/Property/FMulticastSparseDelegateProperty.hpp>
-#include <Unreal/Property/FNameProperty.hpp>
-#include <Unreal/Property/FSoftClassProperty.hpp>
-#include <Unreal/Property/FStrProperty.hpp>
-#include <Unreal/Property/FStructProperty.hpp>
+#include <Unreal/CoreUObject/UObject/FStrProperty.hpp>
 #include <Unreal/Property/FTextProperty.hpp>
-#include <Unreal/Property/FWeakObjectProperty.hpp>
-#include <Unreal/Property/NumericPropertyTypes.hpp>
-#include <Unreal/UClass.hpp>
-#include <Unreal/UEnum.hpp>
-#include <Unreal/UFunction.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/UObject.hpp>
-#include <Unreal/UScriptStruct.hpp>
 #pragma warning(default : 4005)
 
 namespace RC::ObjectDumper
@@ -83,7 +65,7 @@ namespace RC::ObjectDumper
         out_line.append(fmt::format(STR("[{:016X}] "), reinterpret_cast<uintptr_t>(p_this)));
         out_line.append(p_typed_this->GetFullName());
         out_line.append(fmt::format(STR(" [n: {:X}] [c: {:016X}] [or: {:016X}]"),
-                                    p_typed_this->GetNamePrivate().GetComparisonIndex(),
+                                    p_typed_this->GetNamePrivate().GetComparisonIndex().ToUnstableInt(),
                                     reinterpret_cast<uintptr_t>(p_typed_this->GetClassPrivate()),
                                     reinterpret_cast<uintptr_t>(p_typed_this->GetOuterPrivate())));
     }
@@ -102,7 +84,7 @@ namespace RC::ObjectDumper
         out_line.append(fmt::format(STR(" [o: {:X}] "), p_typed_this->GetOffset_Internal()));
 
         auto property_class = p_typed_this->GetClass();
-        out_line.append(fmt::format(STR("[n: {:X}] [c: {:016X}]"), p_typed_this->GetFName().GetComparisonIndex(), property_class.HashObject()));
+        out_line.append(fmt::format(STR("[n: {:X}] [c: {:016X}]"), p_typed_this->GetFName().GetComparisonIndex().ToUnstableInt(), property_class.HashObject()));
 
         if (Version::IsAtLeast(4, 25))
         {
@@ -287,7 +269,7 @@ namespace RC::ObjectDumper
 
         for (auto& Elem : typed_this->ForEachName())
         {
-            out_line.append(fmt::format(STR("\n[{:016X}] {} [n: {:X}] [v: {}]"), 0, Elem.Key.ToString(), Elem.Key.GetComparisonIndex(), Elem.Value));
+            out_line.append(fmt::format(STR("\n[{:016X}] {} [n: {:X}] [v: {}]"), 0, Elem.Key.ToString(), Elem.Key.GetComparisonIndex().ToUnstableInt(), Elem.Value));
         }
     }
 
@@ -324,7 +306,7 @@ namespace RC::ObjectDumper
         }
         out_line.append(STR("\n"));
 
-        for (auto param : typed_this->ForEachProperty())
+        for (auto param : TFieldRange<FProperty>(typed_this, EFieldIterationFlags::IncludeDeprecated))
         {
             dump_xproperty(param, out_line);
         }
@@ -334,7 +316,7 @@ namespace RC::ObjectDumper
     {
         UScriptStruct* script_struct = static_cast<UScriptStruct*>(p_this);
 
-        for (FProperty* prop : script_struct->ForEachProperty())
+        for (FProperty* prop : TFieldRange<FProperty>(script_struct, EFieldIterationFlags::IncludeDeprecated))
         {
             callable(prop);
         }

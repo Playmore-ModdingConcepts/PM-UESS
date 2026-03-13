@@ -8,7 +8,7 @@ RegisterCustomProperty({
     }
 })
 
-RegisterKeyBind(Key.NUM_THREE, {ModifierKey.CONTROL}, function()
+RegisterKeyBind(Key.K, {ModifierKey.CONTROL}, function()
     local Level = FindFirstOf("Level")
     local Actors = Level.Actors
     

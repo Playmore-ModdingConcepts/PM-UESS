@@ -19,35 +19,18 @@
 #include <Unreal/Core/Containers/ScriptArray.hpp>
 #include <Unreal/FString.hpp>
 #include <Unreal/FText.hpp>
-#include <Unreal/Property/FArrayProperty.hpp>
-#include <Unreal/Property/FBoolProperty.hpp>
-#include <Unreal/Property/FClassProperty.hpp>
-#include <Unreal/Property/FDelegateProperty.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Property/FEnumProperty.hpp>
 #include <Unreal/Property/FFieldPathProperty.hpp>
-#include <Unreal/Property/FInterfaceProperty.hpp>
-#include <Unreal/Property/FLazyObjectProperty.hpp>
-#include <Unreal/Property/FMapProperty.hpp>
-#include <Unreal/Property/FMulticastInlineDelegateProperty.hpp>
-#include <Unreal/Property/FMulticastSparseDelegateProperty.hpp>
-#include <Unreal/Property/FNameProperty.hpp>
-#include <Unreal/Property/FObjectProperty.hpp>
-#include <Unreal/Property/FSetProperty.hpp>
-#include <Unreal/Property/FStrProperty.hpp>
-#include <Unreal/Property/FSoftClassProperty.hpp>
-#include <Unreal/Property/FSoftObjectProperty.hpp>
-#include <Unreal/Property/FStructProperty.hpp>
+#include <Unreal/CoreUObject/UObject/FStrProperty.hpp>
+#include <Unreal/CoreUObject/UObject/FUtf8StrProperty.hpp>
+#include <Unreal/CoreUObject/UObject/FAnsiStrProperty.hpp>
 #include <Unreal/Property/FTextProperty.hpp>
-#include <Unreal/Property/FWeakObjectProperty.hpp>
 #include <Unreal/Property/FOptionalProperty.hpp>
-#include <Unreal/Property/NumericPropertyTypes.hpp>
 #include <Unreal/UActorComponent.hpp>
-#include <Unreal/UClass.hpp>
-#include <Unreal/UEnum.hpp>
-#include <Unreal/UFunction.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/UInterface.hpp>
 #include <Unreal/UPackage.hpp>
-#include <Unreal/UScriptStruct.hpp>
 #include <Unreal/UnrealFlags.hpp>
 #pragma warning(default : 4005)
 
@@ -362,7 +345,7 @@ namespace RC::UEGenerator
 
         // Generate delegate type declarations for the current class
         int32_t NumDelegatesGenerated = 0;
-        for (UFunction* function : uclass->ForEachFunction())
+        for (UFunction* function : TFieldRange<UFunction>(uclass, EFieldIterationFlags::None))
         {
             if (is_delegate_signature_function(function))
             {
@@ -376,7 +359,7 @@ namespace RC::UEGenerator
         }
 
         // Generate interface functions
-        for (UFunction* function : uclass->ForEachFunction())
+        for (UFunction* function : TFieldRange<UFunction>(uclass, EFieldIterationFlags::None))
         {
             if (!is_delegate_signature_function(function))
             {
@@ -443,7 +426,7 @@ namespace RC::UEGenerator
 
         // Generate delegate type declarations for the current class
         int32_t NumDelegatesGenerated = 0;
-        for (UFunction* function : uclass->ForEachFunction())
+        for (UFunction* function : TFieldRange<UFunction>(uclass, EFieldIterationFlags::None))
         {
             if (is_delegate_signature_function(function))
             {
@@ -457,7 +440,7 @@ namespace RC::UEGenerator
         }
 
         // Generate properties
-        for (FProperty* property : uclass->ForEachProperty())
+        for (FProperty* property : TFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeDeprecated))
         {
             encountered_replicated_properties |= (property->GetPropertyFlags() & CPF_Net) != 0;
             append_access_modifier(header_data, get_property_access_modifier(property), current_access_modifier);
@@ -494,7 +477,7 @@ namespace RC::UEGenerator
 
         // Generate functions
         std::unordered_set<FName> implemented_functions;
-        for (UFunction* function : uclass->ForEachFunction())
+        for (UFunction* function : TFieldRange<UFunction>(uclass, EFieldIterationFlags::None))
         {
             if (!is_delegate_signature_function(function))
             {
@@ -512,7 +495,7 @@ namespace RC::UEGenerator
         }
         for (const RC::Unreal::FImplementedInterface& uinterface : implemented_interfaces)
         {
-            for (UFunction* interface_function : uinterface.Class->ForEachFunction())
+            for (UFunction* interface_function : TFieldRange<UFunction>(uinterface.Class, EFieldIterationFlags::None))
             {
                 bool should_skip = (interface_function->GetFunctionFlags() & FUNC_BlueprintEvent);
 
@@ -557,7 +540,7 @@ namespace RC::UEGenerator
         append_access_modifier(header_data, AccessModifier::Public, current_access_modifier);
 
         // Generate struct properties
-        for (FProperty* property : script_struct->ForEachProperty())
+        for (FProperty* property : TFieldRange<FProperty>(script_struct, EFieldIterationFlags::IncludeDeprecated))
         {
             append_access_modifier(header_data, get_property_access_modifier(property), current_access_modifier);
             generate_property(script_struct, property, header_data);
@@ -810,7 +793,7 @@ namespace RC::UEGenerator
 
         if (class_default_object != nullptr)
         {
-            for (FProperty* property : uclass->OrderedForEachPropertyInChain())
+            for (FProperty* property : TReverseFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeDeprecated))
             {
                 generate_property_value(uclass, property, class_default_object, implementation_file, STR("this->"));
             }
@@ -856,7 +839,7 @@ namespace RC::UEGenerator
         CaseInsensitiveSet blacklisted_property_names = collect_blacklisted_property_names(uclass);
 
         // Generate functions
-        for (UFunction* function : uclass->ForEachFunction())
+        for (UFunction* function : TFieldRange<UFunction>(uclass, EFieldIterationFlags::None))
         {
             if (!is_delegate_signature_function(function))
             {
@@ -867,7 +850,7 @@ namespace RC::UEGenerator
 
         bool encountered_replicated_properties = false;
 
-        for (FProperty* property : uclass->ForEachProperty())
+        for (FProperty* property : TFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeDeprecated))
         {
             encountered_replicated_properties |= (property->GetPropertyFlags() & CPF_Net) != 0;
         }
@@ -884,7 +867,7 @@ namespace RC::UEGenerator
             implementation_file.append_line(STR("Super::GetLifetimeReplicatedProps(OutLifetimeProps);"));
             implementation_file.append_line(STR(""));
 
-            for (FProperty* property : uclass->ForEachProperty())
+            for (FProperty* property : TFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeDeprecated))
             {
                 if ((property->GetPropertyFlags() & CPF_Net) != 0)
                 {
@@ -912,7 +895,7 @@ namespace RC::UEGenerator
         // TODO: ScriptStruct->InitializeStruct(StructDefaultObject);
         memset(struct_default_object, 0, script_struct->GetPropertiesSize());
 
-        for (FProperty* property : script_struct->OrderedForEachPropertyInChain())
+        for (FProperty* property : TReverseFieldRange<FProperty>(script_struct, EFieldIterationFlags::IncludeDeprecated))
         {
             generate_property_value(script_struct, property, struct_default_object, implementation_file, STR("this->"));
         }
@@ -1335,13 +1318,13 @@ namespace RC::UEGenerator
         if (property->IsA<FStrProperty>())
         {
             FString* string_value = property->ContainerPtrToValuePtr<FString>(object);
-            const StringType string_value_string = string_value->GetCharArray();
+            const StringType string_value_string = **string_value;
 
             // Ensure property either does not exist in parent class or is overriden in the CDO for the child class
             if (super_property != nullptr)
             {
                 FString* super_string_value = super_property->ContainerPtrToValuePtr<FString>(super_object);
-                const StringType super_string_value_string = super_string_value->GetCharArray();
+                const StringType super_string_value_string = **super_string_value;
                 if (string_value_string == super_string_value_string)
                 {
                     return;
@@ -1349,9 +1332,81 @@ namespace RC::UEGenerator
                 super_and_no_access = private_access_modifier;
             }
 
-            if (string_value_string != STR(""))
+            if (!string_value_string.empty())
             {
                 const StringType result_value = create_string_literal(string_value_string);
+                if (!super_and_no_access)
+                {
+                    generate_simple_assignment_expression(property, result_value, implementation_file, property_scope);
+                }
+                else
+                {
+                    generate_advanced_assignment_expression(property, result_value, implementation_file, property_scope, property_type);
+                }
+            }
+            return;
+        }
+
+        // UTF8 String properties
+        if (property->IsA<FUtf8StrProperty>())
+        {
+            FUtf8String* string_value = property->ContainerPtrToValuePtr<FUtf8String>(object);
+            // Convert UTF8 to native string type for comparison and generation
+            const char* utf8_cstr = reinterpret_cast<const char*>(**string_value);
+            const StringType string_value_string = to_generic_string(utf8_cstr);
+
+            // Ensure property either does not exist in parent class or is overriden in the CDO for the child class
+            if (super_property != nullptr)
+            {
+                FUtf8String* super_string_value = super_property->ContainerPtrToValuePtr<FUtf8String>(super_object);
+                const char* super_utf8_cstr = reinterpret_cast<const char*>(**super_string_value);
+                const StringType super_string_value_string = to_generic_string(super_utf8_cstr);
+                if (string_value_string == super_string_value_string)
+                {
+                    return;
+                }
+                super_and_no_access = private_access_modifier;
+            }
+
+            if (!string_value_string.empty())
+            {
+                // Create UTF8TEXT literal for UTF8 strings
+                const StringType result_value = create_utf8_string_literal(string_value_string);
+                if (!super_and_no_access)
+                {
+                    generate_simple_assignment_expression(property, result_value, implementation_file, property_scope);
+                }
+                else
+                {
+                    generate_advanced_assignment_expression(property, result_value, implementation_file, property_scope, property_type);
+                }
+            }
+            return;
+        }
+
+        // ANSI String properties
+        if (property->IsA<FAnsiStrProperty>())
+        {
+            FAnsiString* string_value = property->ContainerPtrToValuePtr<FAnsiString>(object);
+            // Convert ANSI to native string type for comparison and generation
+            const StringType string_value_string = to_generic_string(**string_value);
+
+            // Ensure property either does not exist in parent class or is overriden in the CDO for the child class
+            if (super_property != nullptr)
+            {
+                FAnsiString* super_string_value = super_property->ContainerPtrToValuePtr<FAnsiString>(super_object);
+                const StringType super_string_value_string = to_generic_string(**super_string_value);
+                if (string_value_string == super_string_value_string)
+                {
+                    return;
+                }
+                super_and_no_access = private_access_modifier;
+            }
+
+            if (!string_value_string.empty())
+            {
+                // ANSI strings use plain string literals (no TEXT macro)
+                const StringType result_value = create_ansi_string_literal(string_value_string);
                 if (!super_and_no_access)
                 {
                     generate_simple_assignment_expression(property, result_value, implementation_file, property_scope);
@@ -1512,7 +1567,7 @@ namespace RC::UEGenerator
                 // we are not creating the subobject in a child class unnecessarily.
                 if (super_object && !super_property)
                 {
-                    for (FProperty* check_super_property : super->OrderedForEachPropertyInChain())
+                    for (FProperty* check_super_property : TReverseFieldRange<FProperty>(super, EFieldIterationFlags::IncludeDeprecated))
                     {
                         if (check_super_property->IsA<FObjectProperty>())
                         {
@@ -1609,7 +1664,7 @@ namespace RC::UEGenerator
                     }
                     else if (as_class)
                     {
-                        for (FProperty* check_property : as_class->OrderedForEachPropertyInChain())
+                        for (FProperty* check_property : TReverseFieldRange<FProperty>(as_class, EFieldIterationFlags::IncludeDeprecated))
                         {
                             if (check_property->IsA<FObjectProperty>())
                             {
@@ -1959,56 +2014,93 @@ namespace RC::UEGenerator
 
     auto UEHeaderGenerator::create_string_literal(const StringType& string) -> StringType
     {
+        return create_string_literal_with_macro(string, STR("TEXT"));
+    }
+
+    auto UEHeaderGenerator::create_utf8_string_literal(const StringType& string) -> StringType
+    {
+        return create_string_literal_with_macro(string, STR("UTF8TEXT"));
+    }
+
+    auto UEHeaderGenerator::create_ansi_string_literal(const StringType& string) -> StringType
+    {
+        // ANSI strings don't use a macro, just quotes
+        return create_string_literal_with_macro(string, {});
+    }
+
+    auto UEHeaderGenerator::create_string_literal_with_macro(const StringType& string, const StringType& macro_name) -> StringType
+    {
         StringType result;
-        result.append(STR("TEXT(\""));
+        
+        // Open the literal
+        if (!macro_name.empty())
+        {
+            result.append(macro_name);
+            result.append(STR("(\""));
+        }
+        else
+        {
+            result.append(STR("\""));
+        }
 
         bool previous_character_was_hex = false;
-
         const CharType* ptr = string.c_str();
+        
         while (CharType ch = *ptr++)
         {
             switch (ch)
             {
-            case STR('\r'): {
+            case STR('\r'):
                 continue;
-            }
-            case STR('\n'): {
+            case STR('\n'):
                 result.append(STR("\\n"));
                 previous_character_was_hex = false;
                 break;
-            }
-            case STR('\\'): {
+            case STR('\t'):
+                result.append(STR("\\t"));
+                previous_character_was_hex = false;
+                break;
+            case STR('\\'):
                 result.append(STR("\\\\"));
                 previous_character_was_hex = false;
                 break;
-            }
-            case STR('\"'): {
+            case STR('\"'):
                 result.append(STR("\\\""));
                 previous_character_was_hex = false;
                 break;
-            }
-            default: {
-                if (ch < 31 || ch >= 128)
+            default:
+                // Only escape control characters (< 32)
+                // For ANSI (no macro), also escape > 127
+                if (ch < 32 || (macro_name.empty() && ch > 127))
                 {
-                    result.append(fmt::format(STR("\\x{:04X}"), ch));
+                    result.append(fmt::format(STR("\\x{:02X}"), static_cast<unsigned char>(ch)));
                     previous_character_was_hex = true;
                 }
                 else
                 {
-                    // We close and open the literal (with TEXT) here in order to ensure that successive hex characters aren't
-                    // appended to the hex sequence, causing a different number
+                    // Handle hex digit continuation
                     if (previous_character_was_hex && iswxdigit(ch) != 0)
                     {
-                        result.append(STR("\")TEXT(\""));
+                        if (!macro_name.empty())
+                        {
+                            result.append(STR("\")"));
+                            result.append(macro_name);
+                            result.append(STR("(\""));
+                        }
+                        else
+                        {
+                            result.append(STR("\"\""));  // String concatenation for ANSI
+                        }
                     }
                     previous_character_was_hex = false;
                     result.push_back(ch);
                 }
                 break;
             }
-            }
         }
-        result.append(STR("\")"));
+        
+        // Close the literal
+        result.append(!macro_name.empty() ? STR("\")") : STR("\""));
         return result;
     }
 
@@ -2051,12 +2143,12 @@ namespace RC::UEGenerator
         {
             UClass* class_object = static_cast<UClass*>(uclass);
 
-            for (FProperty* property : class_object->ForEachProperty())
+            for (FProperty* property : TFieldRange<FProperty>(class_object, EFieldIterationFlags::IncludeDeprecated))
             {
                 result_set.insert(property->GetName());
             }
 
-            for (UFunction* function : class_object->ForEachFunction())
+            for (UFunction* function : TFieldRange<UFunction>(class_object, EFieldIterationFlags::None))
             {
                 result_set.insert(function->GetName());
             }
@@ -2065,7 +2157,7 @@ namespace RC::UEGenerator
         {
             UScriptStruct* script_struct = static_cast<UScriptStruct*>(uclass);
 
-            for (FProperty* property : script_struct->ForEachProperty())
+            for (FProperty* property : TFieldRange<FProperty>(script_struct, EFieldIterationFlags::IncludeDeprecated))
             {
                 result_set.insert(property->GetName());
             }
@@ -2238,7 +2330,7 @@ namespace RC::UEGenerator
             add_config_name = true;
         }
 
-        for (FProperty* property : uclass->ForEachProperty())
+        for (FProperty* property : TFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeDeprecated))
         {
             if ((property->GetPropertyFlags() & CPF_Config) != 0 || (property->GetPropertyFlags() & CPF_GlobalConfig) != 0)
             {
@@ -2701,6 +2793,14 @@ namespace RC::UEGenerator
         {
             return STR("FString");
         }
+        else if (property->IsA<FUtf8StrProperty>())
+        {
+            return STR("FUtf8String");
+        }
+        else if (property->IsA<FAnsiStrProperty>())
+        {
+            return STR("FAnsiString");
+        }
         else if (property->IsA<FTextProperty>())
         {
             return STR("FText");
@@ -3082,7 +3182,7 @@ namespace RC::UEGenerator
         if (!blueprint_callable_added && UE4SSProgram::settings_manager.UHTHeaderGenerator.MakeAllFunctionsBlueprintCallable && !is_function_pure_virtual)
         {
             bool has_invalid_param{};
-            for (FProperty* param : function->ForEachProperty())
+            for (FProperty* param : TFieldRange<FProperty>(function, EFieldIterationFlags::IncludeDeprecated))
             {
                 if (!is_subtype_valid(param))
                 {
@@ -3162,7 +3262,7 @@ namespace RC::UEGenerator
         static auto latent_action_info = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.LatentActionInfo"));
         bool bWCFound = false;
         bool bLAFound = false;
-        for (FProperty* param : function->ForEachProperty())
+        for (FProperty* param : TFieldRange<FProperty>(function, EFieldIterationFlags::IncludeDeprecated))
         {
             auto param_name = param->GetName();
             auto param_uc_name = string_to_uppercase(param_name);
@@ -3200,7 +3300,7 @@ namespace RC::UEGenerator
     {
         StringType function_arguments_string;
 
-        for (FProperty* property : function->ForEachProperty())
+        for (FProperty* property : TFieldRange<FProperty>(function, EFieldIterationFlags::IncludeDeprecated))
         {
             auto property_flags = property->GetPropertyFlags();
             if ((property_flags & CPF_Parm) != 0 && (property_flags & CPF_ReturnParm) == 0)
@@ -3221,8 +3321,16 @@ namespace RC::UEGenerator
 
                 // Force const reference when we're dealing with strings, and they are not passed by reference
                 // UHT for whatever reason completely strips const and reference flags from string properties, but happily generates them in boilerplate code
+                static const FName StrPropertyFName(STR("StrProperty"));
+                static const FName Utf8StrPropertyFName(STR("Utf8StrProperty"));
+                static const FName AnsiStrPropertyFName(STR("AnsiStrProperty"));
+
+                const FName property_class_fname = property->GetClass().GetFName();
                 const bool should_force_const_ref =
-                        ((property_flags & (CPF_ReferenceParm | CPF_OutParm)) == 0) && (property->GetClass().GetName() == STR("StrProperty"));
+                        ((property_flags & (CPF_ReferenceParm | CPF_OutParm)) == 0) &&
+                        (property_class_fname == StrPropertyFName ||
+                         property_class_fname == Utf8StrPropertyFName ||
+                         property_class_fname == AnsiStrPropertyFName);
 
                 // Append const keyword to the parameter declaration if it is marked as const parameter
                 if ((property_flags & CPF_ConstParm) != 0 || should_force_const_ref)
@@ -3417,6 +3525,14 @@ namespace RC::UEGenerator
         {
             return STR("TEXT(\"\")");
         }
+        if (field_class_name == STR("Utf8StrProperty"))
+        {
+            return STR("UTF8TEXT(\"\")");
+        }
+        if (field_class_name == STR("AnsiStrProperty"))
+        {
+            return STR("\"\"");
+        }
         if (field_class_name == STR("TextProperty"))
         {
             return STR("FText::GetEmpty()");
@@ -3444,7 +3560,7 @@ namespace RC::UEGenerator
             blueprint_info = get_class_blueprint_info(super_class);
         }
 
-        for (FProperty* property : uclass->ForEachProperty())
+        for (FProperty* property : TFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeDeprecated))
         {
             auto property_flags = property->GetPropertyFlags();
 
@@ -3455,7 +3571,7 @@ namespace RC::UEGenerator
             }
         }
 
-        for (UFunction* function : uclass->ForEachFunction())
+        for (UFunction* function : TFieldRange<UFunction>(uclass, EFieldIterationFlags::None))
         {
             auto function_flags = function->GetFunctionFlags();
 
@@ -3486,7 +3602,7 @@ namespace RC::UEGenerator
         }
         bool is_blueprint_type = false;
 
-        for (FProperty* property : script_struct->ForEachProperty())
+        for (FProperty* property : TFieldRange<FProperty>(script_struct, EFieldIterationFlags::IncludeDeprecated))
         {
             auto property_flags = property->GetPropertyFlags();
 
@@ -3502,7 +3618,7 @@ namespace RC::UEGenerator
     auto UEHeaderGenerator::is_function_parameter_shadowing(UClass* uclass, FProperty* function_parameter) -> bool
     {
         bool is_shadowing = false;
-        for (FProperty* property : uclass->ForEachPropertyInChain())
+        for (FProperty* property : TFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeSuper | EFieldIterationFlags::IncludeDeprecated))
         {
             if (property->GetFName().Equals(function_parameter->GetFName()))
             {
@@ -3533,6 +3649,10 @@ namespace RC::UEGenerator
     {
         this->m_root_directory = root_directory;
         this->m_primary_module_name = determine_primary_game_module_name();
+
+        // Clear static maps to avoid stale data from previous generator runs
+        m_used_file_names.clear();
+        m_dependency_object_to_unique_id.clear();
 
         // Force inclusion of Core and CoreUObject into all the generated module build files
         this->m_forced_module_dependencies.insert(STR("Core"));

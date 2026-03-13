@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -15,6 +17,62 @@ namespace RC::LuaMadeSimple
 
     // Current errors for all lua states
     static std::unordered_map<lua_State*, std::string> lua_state_errors;
+
+    // Error callbacks for external error handling/logging
+    static std::vector<LuaErrorCallback> lua_error_callbacks;
+    static std::mutex lua_error_callbacks_mutex;
+
+    auto register_error_callback(LuaErrorCallback callback) -> void
+    {
+        std::lock_guard<std::mutex> lock(lua_error_callbacks_mutex);
+        lua_error_callbacks.push_back(callback);
+    }
+
+    auto unregister_error_callback(LuaErrorCallback callback) -> void
+    {
+        std::lock_guard<std::mutex> lock(lua_error_callbacks_mutex);
+        lua_error_callbacks.erase(
+            std::remove(lua_error_callbacks.begin(), lua_error_callbacks.end(), callback),
+            lua_error_callbacks.end());
+    }
+
+    static auto notify_error_callbacks(lua_State* L, const std::string& error_message, const std::string& traceback) -> void
+    {
+        std::lock_guard<std::mutex> lock(lua_error_callbacks_mutex);
+        for (auto& callback : lua_error_callbacks)
+        {
+            if (callback)
+            {
+                callback(L, error_message, traceback);
+            }
+        }
+    }
+
+    // Message handler for lua_pcall that captures the stack while it's still intact
+    // This is called BEFORE the stack unwinds, so we can get a proper traceback
+    static int pcall_error_handler(lua_State* L)
+    {
+        // Get the error message from the top of the stack
+        const char* msg = lua_tostring(L, 1);
+        std::string error_message = msg ? msg : "unknown error";
+
+        // Generate traceback while stack is intact (starting at level 1 to skip this handler)
+        luaL_traceback(L, L, error_message.c_str(), 1);
+        std::string traceback = lua_tostring(L, -1);
+
+        // Notify callbacks while stack is still intact
+        notify_error_callbacks(L, error_message, traceback);
+
+        // Return the traceback as the error message
+        return 1;
+    }
+
+    // Helper to push the error handler and return its stack index
+    static int push_error_handler(lua_State* L)
+    {
+        lua_pushcfunction(L, pcall_error_handler);
+        return lua_gettop(L);
+    }
 
     template <>
     auto LuaTableData<-1>::is_nil() -> bool
@@ -410,6 +468,11 @@ namespace RC::LuaMadeSimple
         ::RC::LuaMadeSimple::dump_stack(get_lua_state(), message);
     }
 
+    auto Lua::get_stack_dump(const char* message) const -> std::string
+    {
+        return ::RC::LuaMadeSimple::get_stack_dump(get_lua_state(), message);
+    }
+
     auto Lua::handle_error(const std::string& error_message) const -> const std::string
     {
         return ::RC::LuaMadeSimple::handle_error(get_lua_state(), error_message);
@@ -536,15 +599,26 @@ namespace RC::LuaMadeSimple
 
     auto Lua::execute_file(std::string_view file_name_and_path) const -> void
     {
+        // Push error handler first
+        int err_handler_idx = push_error_handler(get_lua_state());
+
         if (int status = luaL_loadfile(get_lua_state(), file_name_and_path.data()); status != LUA_OK)
         {
+            lua_remove(get_lua_state(), err_handler_idx); // Clean up error handler
             throw std::runtime_error{fmt::format("[Lua::execute_file] luaL_loadfile returned {}", resolve_status_message(status))};
         }
 
-        if (int status = lua_pcall(get_lua_state(), 0, LUA_MULTRET, 0); status != LUA_OK)
+        // Use our error handler (err_handler_idx) for pcall
+        if (int status = lua_pcall(get_lua_state(), 0, LUA_MULTRET, err_handler_idx); status != LUA_OK)
         {
-            throw std::runtime_error{fmt::format("[Lua::execute_file] lua_pcall returned {}", resolve_status_message(status))};
+            // Error message already includes traceback from our handler
+            std::string error_msg = lua_tostring(get_lua_state(), -1);
+            lua_pop(get_lua_state(), 1); // Pop error message
+            lua_remove(get_lua_state(), err_handler_idx); // Clean up error handler
+            throw std::runtime_error{fmt::format("[Lua::execute_file] lua_pcall returned {}: {}", resolve_status_message(status), error_msg)};
         }
+
+        lua_remove(get_lua_state(), err_handler_idx); // Clean up error handler
     }
 
     auto Lua::execute_file(std::wstring_view file_name_and_path) const -> void
@@ -561,15 +635,25 @@ namespace RC::LuaMadeSimple
 
     auto Lua::execute_string(std::string_view code) const -> void
     {
+        // Push error handler first
+        int err_handler_idx = push_error_handler(get_lua_state());
+
         if (int status = luaL_loadstring(get_lua_state(), code.data()); status != LUA_OK)
         {
+            lua_remove(get_lua_state(), err_handler_idx); // Clean up error handler
             throw_error(fmt::format("[Lua::execute_string] luaL_loadstring returned {}", resolve_status_message(status)));
         }
 
-        if (int status = lua_pcall(get_lua_state(), 0, LUA_MULTRET, 0); status != LUA_OK)
+        // Use our error handler for pcall
+        if (int status = lua_pcall(get_lua_state(), 0, LUA_MULTRET, err_handler_idx); status != LUA_OK)
         {
+            // Error message already includes traceback from our handler, just clean up
+            lua_pop(get_lua_state(), 1); // Pop error message (already processed in handler)
+            lua_remove(get_lua_state(), err_handler_idx); // Clean up error handler
             throw_error(fmt::format("[Lua::execute_string] lua_pcall returned {}", resolve_status_message(status)));
         }
+
+        lua_remove(get_lua_state(), err_handler_idx); // Clean up error handler
     }
 
     auto Lua::execute_string(std::wstring_view code) const -> void
@@ -665,9 +749,19 @@ namespace RC::LuaMadeSimple
         return string;
     }
 
-    auto Lua::set_string(std::string_view string) const -> void
+    auto Lua::set_string(const char* str, size_t len) const -> void
     {
-        lua_pushstring(get_lua_state(), string.data());
+        lua_pushlstring(get_lua_state(), str, len);
+    }
+
+    auto Lua::set_string(const uint8_t* str, size_t len) const -> void
+    {
+        lua_pushlstring(get_lua_state(), reinterpret_cast<const char*>(str), len);
+    }
+
+    auto Lua::set_string(std::string_view str) const -> void
+    {
+        lua_pushlstring(get_lua_state(), str.data(), str.length());
     }
 
     auto Lua::is_number(int32_t force_index) const -> bool
@@ -844,10 +938,40 @@ namespace RC::LuaMadeSimple
 
     auto Lua::call_function(int32_t num_params, int32_t num_return_values) const -> void
     {
-        if (int status = lua_pcall(get_lua_state(), num_params, num_return_values, 0); status != LUA_OK)
+        lua_State* L = get_lua_state();
+
+        // Insert error handler below the function and its arguments
+        // Stack before: [... func arg1 arg2 ... argN] (top = N items)
+        // We need: [... err_handler func arg1 arg2 ... argN]
+
+        // Get absolute index of where the function currently is
+        int top_before = lua_gettop(L);
+        int func_abs_idx = top_before - num_params;  // func is at this absolute position
+
+        // Push error handler, then insert it below the function
+        lua_pushcfunction(L, pcall_error_handler);
+        // Now stack is: [... func arg1 ... argN err_handler]
+        // Insert at func position to shift everything up
+        lua_insert(L, func_abs_idx);
+        // Now stack is: [... err_handler func arg1 ... argN]
+
+        // Error handler is at func_abs_idx (absolute)
+        int err_handler_abs = func_abs_idx;
+
+        if (int status = lua_pcall(L, num_params, num_return_values, err_handler_abs); status != LUA_OK)
         {
-            throw std::runtime_error{fmt::format("[Lua::call_function] lua_pcall returned {}", resolve_status_message(status))};
+            // Error message (with traceback) is on stack, error handler already notified callbacks
+            const char* msg = lua_tostring(L, -1);
+            std::string error_msg = msg ? msg : "(no error message)";
+            lua_pop(L, 1);  // Pop error message
+            lua_remove(L, err_handler_abs);  // Remove error handler
+            // Don't use resolve_status_message here - it would pop the stack again
+            throw std::runtime_error{fmt::format("[Lua::call_function] lua_pcall returned {} => {}", status_to_string(status), error_msg)};
         }
+
+        // Remove error handler (it's below any return values)
+        // Stack after pcall success: [... err_handler ret1 ret2 ... retN]
+        lua_remove(L, err_handler_abs);
     }
 
     auto Lua::call_function(std::string_view global_function_name, int32_t num_params, int32_t num_return_values) const -> void
@@ -926,6 +1050,9 @@ namespace RC::LuaMadeSimple
             final_message = fmt::format("{}\nNo traceback", error_message);
         }
 
+        // Notify error callbacks before clearing the stack so they can inspect state
+        notify_error_callbacks(lua_state, error_message, final_message);
+
         // Clearing the Lua stack because we're treating errors as non-fatal, but we still need to clean everything up
         lua_settop(lua_state, 0);
         return final_message;
@@ -943,6 +1070,11 @@ namespace RC::LuaMadeSimple
     {
         auto new_lua_state = luaL_newstate();
         return *lua_instances.emplace(new_lua_state, std::make_unique<Lua>(new_lua_state)).first->second;
+    }
+
+    auto RC_LMS_API push_pcall_error_handler(lua_State* L) -> int
+    {
+        return push_error_handler(L);
     }
 
     // dumpstack function from: https://stackoverflow.com/questions/59091462/from-c-how-can-i-print-the-contents-of-the-lua-stack/59097940#59097940
@@ -978,6 +1110,41 @@ namespace RC::LuaMadeSimple
             printf_s("\n");
         }
         printf_s("\nLUA Stack dump -> END----------------------------\n\n");
+    }
+
+    // https://stackoverflow.com/questions/59091462/from-c-how-can-i-print-the-contents-of-the-lua-stack/59097940#59097940
+    auto get_stack_dump(lua_State* lua_state, const char* message) -> std::string
+    {
+        auto out_message = fmt::format("\n\nLUA Stack dump -> START------------------------------\n{}\n", message);
+        int top = lua_gettop(lua_state);
+        for (int i = 1; i <= top; i++)
+        {
+            out_message.append(fmt::format("{}\t{}\t", i, luaL_typename(lua_state, i)));
+            switch (lua_type(lua_state, i))
+            {
+            case LUA_TNUMBER:
+                out_message.append(fmt::format("{}", lua_tonumber(lua_state, i)));
+                break;
+            case LUA_TSTRING:
+                out_message.append(fmt::format("{}", lua_tostring(lua_state, i)));
+                break;
+            case LUA_TBOOLEAN:
+                out_message.append(fmt::format("{}", (lua_toboolean(lua_state, i) ? "true" : "false")));
+                break;
+            case LUA_TNIL:
+                out_message.append("nil");
+                break;
+            case LUA_TFUNCTION:
+                out_message.append("function");
+                break;
+            default:
+                out_message.append(fmt::format("{}", lua_topointer(lua_state, i)));
+                break;
+            }
+            out_message.append("\n");
+        }
+        out_message.append("\nLUA Stack dump -> END----------------------------\n\n");
+        return out_message;
     }
 
     auto process_lua_function(lua_State* lua_state) -> int

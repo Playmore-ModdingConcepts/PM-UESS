@@ -23,25 +23,22 @@
 #include <GUI/LiveView/Filter/InstancesOnly.hpp>
 #include <GUI/LiveView/Filter/NonInstancesOnly.hpp>
 #include <GUI/LiveView/Filter/SearchFilter.hpp>
+#include <GUI/LiveView/Filter/MaxValueSize.hpp>
 #include <GUI/UFunctionCallerWidget.hpp>
+#include <GUI/Dumpers.hpp>
+#include <FlagsStringifier.hpp>
 #include <Helpers/String.hpp>
-#include <JSON/JSON.hpp>
-#include <JSON/Parser/Parser.hpp>
+#include <glaze/glaze.hpp>
 #include <UE4SSProgram.hpp>
 #include <Unreal/AActor.hpp>
 #include <Unreal/FOutputDevice.hpp>
-#include <Unreal/Property/FArrayProperty.hpp>
-#include <Unreal/Property/FBoolProperty.hpp>
-#include <Unreal/Property/FObjectProperty.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Property/FEnumProperty.hpp>
-#include <Unreal/Property/NumericPropertyTypes.hpp>
-#include <Unreal/UClass.hpp>
-#include <Unreal/UEnum.hpp>
-#include <Unreal/UFunction.hpp>
+#include <Unreal/Engine/UDataTable.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectArray.hpp>
 #include <Unreal/UPackage.hpp>
-#include <Unreal/UScriptStruct.hpp>
 #include <Unreal/UnrealInitializer.hpp>
 #include <Unreal/UKismetNodeHelperLibrary.hpp>
 #include <imgui.h>
@@ -87,6 +84,7 @@ namespace RC::GUI
     bool LiveView::s_watches_loaded_from_disk{};
     bool LiveView::s_filters_loaded_from_disk{};
     bool LiveView::s_use_regex_for_search{};
+    bool LiveView::s_search_by_address{};
 
     static LiveView* s_live_view{};
 
@@ -100,6 +98,7 @@ namespace RC::GUI
         void* container = nullptr;
         UObject* obj = nullptr;
         LiveView::ContainerType container_type = LiveView::ContainerType::Object;
+        bool editable = true;
     };
     static DeferredPropertyEditPopup s_deferred_property_edit_popup{};
 
@@ -112,41 +111,61 @@ namespace RC::GUI
         UEnum* uenum = nullptr;
         int index = -1;
 
-        enum Type { EditName, EditValue, AddName } type;
+        enum Type
+        {
+            EditName,
+            EditValue,
+            AddName
+        } type;
     };
     static DeferredEnumEditPopup s_deferred_enum_edit_popup{};
 
     static auto get_object_full_name_cxx_string(UObject* object) -> std::string;
 
-    static auto filter_out_objects(UObject* object) -> bool
+    static auto filter_out_objects(UObject* object) -> Filter::FilterResult
     {
-        APPLY_PRE_SEARCH_FILTERS(SearchFilters)
-        if (LiveView::s_name_search_results_set.contains(object))
+        if (const auto result = eval_pre_search_filters(SearchFilters, object); RC_LIVE_VIEW_WAS_FILTERED(result))
         {
-            return true;
+            return result;
         }
-        APPLY_POST_SEARCH_FILTERS(SearchFilters)
-        return false;
+        if (!LiveView::s_name_to_search_by.empty() && LiveView::s_name_search_results_set.contains(object))
+        {
+            return RC_LIVE_VIEW_MAKE_FILTER_RETURN_VALUE(true, STR("No name to search for, and object not in result set"));
+        }
+        if (const auto result = eval_post_search_filters(SearchFilters, object); RC_LIVE_VIEW_WAS_FILTERED(result))
+        {
+            return result;
+        }
+        return RC_LIVE_VIEW_MAKE_FILTER_RETURN_VALUE(false, {});
     }
 
-    static auto attempt_to_add_search_result(UObject* object) -> void
+    static auto attempt_to_add_search_result(UObject* object, bool ignore_name = false) -> Filter::FilterResult
     {
         // TODO: Stop using the 'HashObject' function when needing the address of an FFieldClassVariant because it's not designed to return an address.
         //       Maybe make the ToFieldClass/ToUClass functions public (append 'Unsafe' to the function names).
-        if (LiveView::s_name_to_search_by.empty() ||
-            LiveView::s_need_to_filter_out_properties && object->IsA(std::bit_cast<UClass*>(FProperty::StaticClass().HashObject())))
+        if (!ignore_name && (LiveView::s_name_to_search_by.empty() ||
+                             LiveView::s_need_to_filter_out_properties && object->IsA(std::bit_cast<UClass*>(FProperty::StaticClass().HashObject()))))
         {
-            return;
+            return RC_LIVE_VIEW_MAKE_FILTER_RETURN_VALUE(true, STR("Searched by name, but no name supplied"));
         }
 
-        auto name_to_search_by = LiveView::s_name_to_search_by;
-        std::transform(name_to_search_by.begin(), name_to_search_by.end(), name_to_search_by.begin(), [](char c) {
-            return std::tolower(c);
-        });
-
-        if (LiveView::s_include_inheritance)
+        std::string name_to_search_by{};
+        if (!ignore_name)
         {
-            for (UStruct* super : object->GetClassPrivate()->ForEachSuperStruct())
+            name_to_search_by = LiveView::s_name_to_search_by;
+            std::transform(name_to_search_by.begin(), name_to_search_by.end(), name_to_search_by.begin(), [](char c) {
+                return std::tolower(c);
+            });
+        }
+
+        if (const auto result = filter_out_objects(object); RC_LIVE_VIEW_WAS_FILTERED(result))
+        {
+            return result;
+        }
+
+        if (LiveView::s_include_inheritance && !ignore_name)
+        {
+            for (UStruct* super : TSuperStructRange(object->GetClassPrivate()))
             {
                 auto super_full_name = get_object_full_name_cxx_string(super);
                 std::transform(super_full_name.begin(), super_full_name.end(), super_full_name.begin(), [](char c) {
@@ -161,14 +180,9 @@ namespace RC::GUI
             }
         }
 
-        if (filter_out_objects(object))
-        {
-            return;
-        }
-
         if (LiveView::s_include_inheritance && LiveView::s_name_search_results_set.contains(object))
         {
-            return;
+            return RC_LIVE_VIEW_MAKE_FILTER_RETURN_VALUE(true, STR("Include inheritance, but object not inside result set"));
         }
 
         auto object_full_name = get_object_full_name_cxx_string(object);
@@ -176,7 +190,7 @@ namespace RC::GUI
             return std::tolower(c);
         });
 
-        if (LiveView::s_use_regex_for_search)
+        if (LiveView::s_use_regex_for_search && !ignore_name)
         {
             try
             {
@@ -193,10 +207,29 @@ namespace RC::GUI
                 s_live_view->set_is_searching_by_name(false);
                 s_live_view->set_search_field_clear_requested(true);
             }
+            return RC_LIVE_VIEW_MAKE_FILTER_RETURN_VALUE(false, STR("regex"));
+        }
+
+        if (ignore_name || object_full_name.find(name_to_search_by) != object_full_name.npos)
+        {
+            LiveView::s_name_search_results.emplace_back(object);
+            LiveView::s_name_search_results_set.emplace(object);
+        }
+
+        return RC_LIVE_VIEW_MAKE_FILTER_RETURN_VALUE(false, STR("not regex"));
+    }
+
+    static void attempt_to_add_search_by_address_result(uintptr_t address_to_search_by, UObject* object)
+    {
+        auto object_addr = std::bit_cast<uintptr_t>(object);
+        if (address_to_search_by < object_addr)
+        {
             return;
         }
 
-        if (object_full_name.find(name_to_search_by) != object_full_name.npos)
+        auto uclass = object->IsA<UStruct>() ? static_cast<UClass*>(object) : object->GetClassPrivate();
+        uintptr_t object_size = uclass->GetPropertiesSize();
+        if (address_to_search_by < object_addr + object_size)
         {
             LiveView::s_name_search_results.emplace_back(object);
             LiveView::s_name_search_results_set.emplace(object);
@@ -249,7 +282,7 @@ namespace RC::GUI
             {
                 return;
             }
-            attempt_to_add_search_result(std::bit_cast<UObject*>(object));
+            attempt_to_add_search_result(std::bit_cast<UObject*>(object), LiveView::s_apply_search_filters_when_not_searching);
         }
 
         void OnUObjectArrayShutdown() override
@@ -310,57 +343,73 @@ namespace RC::GUI
     };
     FLiveViewDeleteListener FLiveViewDeleteListener::LiveViewDeleteListener{};
 
-    static auto add_bool_filter_to_json(JSON::Array& json_filters, const StringType& filter_name, bool is_enabled) -> void
+    static auto add_bool_filter_to_json(glz::generic::array_t& json_filters, const StringType& filter_name, bool is_enabled) -> void
     {
-        auto& json_object = json_filters.new_object();
-        json_object.new_string(STR("FilterName"), filter_name);
-        auto& filter_data = json_object.new_object(STR("FilterData"));
-        filter_data.new_bool(STR("Enabled"), is_enabled);
+        glz::generic json_object = glz::generic::object_t{};
+        json_object["FilterName"] = to_string(filter_name);
+        glz::generic filter_data = glz::generic::object_t{};
+        filter_data["Enabled"] = is_enabled;
+        json_object["FilterData"] = std::move(filter_data);
+        json_filters.emplace_back(std::move(json_object));
+    }
+
+    static auto add_int32_filter_to_json(glz::generic::array_t& json_filters, const StringType& filter_name, int32_t value) -> void
+    {
+        glz::generic json_object = glz::generic::object_t{};
+        json_object["FilterName"] = to_string(filter_name);
+        glz::generic filter_data = glz::generic::object_t{};
+        filter_data["Value"] = static_cast<double>(value);
+        json_object["FilterData"] = std::move(filter_data);
+        json_filters.emplace_back(std::move(json_object));
     }
 
     template <typename ContainerType>
-    static auto add_array_filter_to_json(JSON::Array& json_filters, const StringType& filter_name, const ContainerType& container, const StringType& array_name)
+    static auto add_array_filter_to_json(glz::generic::array_t& json_filters, const StringType& filter_name, const ContainerType& container, const StringType& array_name)
             -> void
     {
-        auto& json_object = json_filters.new_object();
-        json_object.new_string(STR("FilterName"), filter_name);
-        auto& filter_data = json_object.new_object(STR("FilterData"));
+        glz::generic json_object = glz::generic::object_t{};
+        json_object["FilterName"] = to_string(filter_name);
+        glz::generic filter_data = glz::generic::object_t{};
 
         if (array_name == STR("ClassNames"))
         {
-            filter_data.new_bool(STR("IsExclude"), Filter::ClassNamesFilter::b_is_exclude);
+            filter_data["IsExclude"] = Filter::ClassNamesFilter::b_is_exclude;
         }
         else if (array_name == STR("FunctionParamFlags"))
         {
-            filter_data.new_bool(STR("IncludeReturnProperty"), Filter::FunctionParamFlags::s_include_return_property);
+            filter_data["IncludeReturnProperty"] = Filter::FunctionParamFlags::s_include_return_property;
         }
 
-        auto& values_array = filter_data.new_array(array_name);
+        glz::generic::array_t values_array{};
         for (const auto& value : container)
         {
             if constexpr (std::is_same_v<typename ContainerType::value_type, FName>)
             {
-                values_array.new_string(value.ToString());
+                values_array.emplace_back(to_string(value.ToString()));
             }
             else if constexpr (std::is_same_v<typename ContainerType::value_type, bool>)
             {
-                values_array.new_bool(value);
+                values_array.emplace_back(value);
             }
             else
             {
-                values_array.new_string(value);
+                values_array.emplace_back(to_string(value));
             }
         }
+        filter_data[to_string(array_name)] = std::move(values_array);
+        json_object["FilterData"] = std::move(filter_data);
+        json_filters.emplace_back(std::move(json_object));
     }
 
     static auto internal_save_filters_to_disk() -> void
     {
-        auto json = JSON::Object{};
-        auto& json_filters = json.new_array(STR("Filters"));
+        glz::generic json = glz::generic::object_t{};
+        glz::generic::array_t json_filters{};
         {
             add_bool_filter_to_json(json_filters, STR("IncludeInheritance"), LiveView::s_include_inheritance);
             add_bool_filter_to_json(json_filters, STR("UseRegexForSearch"), LiveView::s_use_regex_for_search);
             add_bool_filter_to_json(json_filters, STR("ApplySearchFiltersWhenNotSearching"), LiveView::s_apply_search_filters_when_not_searching);
+            add_bool_filter_to_json(json_filters, STR("SearchByAddress"), LiveView::s_search_by_address);
             add_bool_filter_to_json(json_filters, Filter::DefaultObjectsOnly::s_debug_name, Filter::DefaultObjectsOnly::s_enabled);
             add_bool_filter_to_json(json_filters, Filter::IncludeDefaultObjects::s_debug_name, Filter::IncludeDefaultObjects::s_enabled);
             add_bool_filter_to_json(json_filters, Filter::InstancesOnly::s_debug_name, Filter::InstancesOnly::s_enabled);
@@ -372,13 +421,19 @@ namespace RC::GUI
             add_array_filter_to_json(json_filters, Filter::HasPropertyType::s_debug_name, Filter::HasPropertyType::list_property_types, STR("PropertyTypes"));
             add_array_filter_to_json(json_filters, Filter::FunctionParamFlags::s_debug_name, Filter::FunctionParamFlags::s_checkboxes, STR("FunctionParamFlags"));
         }
+        {
+            add_int32_filter_to_json(json_filters, Filter::MaxValueSize::s_debug_name, Filter::MaxValueSize::s_value);
+        }
+        json["Filters"] = std::move(json_filters);
 
         auto json_file = File::open(StringType{UE4SSProgram::get_program().get_working_directory()} + fmt::format(STR("\\liveview\\filters.meta.json")),
                                     File::OpenFor::Writing,
                                     File::OverwriteExistingFile::Yes,
                                     File::CreateIfNonExistent::Yes);
-        int32_t json_indent_level{};
-        json_file.write_string_to_file(json.serialize(JSON::ShouldFormat::Yes, &json_indent_level));
+        if (auto result = glz::write<glz::opts{.prettify = true}>(json); result.has_value())
+        {
+            json_file.write_string_to_file(to_wstring(result.value()));
+        }
     }
 
     static auto save_filters_to_disk() -> void
@@ -389,18 +444,18 @@ namespace RC::GUI
     }
 
     template <typename T>
-    static auto json_array_to_filters_list(JSON::Array& json_array, std::vector<T>& list, StringType type, std::string& internal_value) -> void
+    static auto json_array_to_filters_list(const glz::generic::array_t& json_array, std::vector<T>& list, StringType type, std::string& internal_value) -> void
     {
         list.clear();
         internal_value.clear();
-        json_array.for_each([&](JSON::Value& item) {
-            if (!item.is<JSON::String>())
+        for (const auto& item : json_array)
+        {
+            if (!item.is_string())
             {
                 throw std::runtime_error{fmt::format("Invalid {} in 'filters.meta.json'", to_string(type))};
             }
-            list.emplace_back(item.as<JSON::String>()->get_view());
-            return LoopAction::Continue;
-        });
+            list.emplace_back(to_wstring(item.get<std::string>()));
+        }
         for (const auto& class_name : list)
         {
             if constexpr (std::is_same_v<T, FName>)
@@ -431,85 +486,105 @@ namespace RC::GUI
             return;
         }
 
-        const auto json_global_object = JSON::Parser::parse(json_file_contents);
-        const auto& json_filters = json_global_object->get<JSON::Array>(STR("Filters"));
-        json_filters.for_each([&](const JSON::Value& filter) {
-            if (!filter.is<JSON::Object>())
+        glz::generic json_root{};
+        auto parse_result = glz::read_json(json_root, to_string(json_file_contents));
+        if (parse_result)
+        {
+            throw std::runtime_error{"Failed to parse 'filters.meta.json'"};
+        }
+
+        const auto& json_filters = json_root["Filters"].get<glz::generic::array_t>();
+        for (const auto& filter : json_filters)
+        {
+            if (!filter.is_object())
             {
                 throw std::runtime_error{"Invalid filter in 'filters.meta.json'"};
             }
-            auto& json_object = *filter.as<JSON::Object>();
-            auto filter_name = json_object.get<JSON::String>(STR("FilterName")).get_view();
-            auto& filter_data = json_object.get<JSON::Object>(STR("FilterData"));
+            const auto& json_object = filter.get<glz::generic::object_t>();
+            auto filter_name = json_object.at("FilterName").get<std::string>();
+            const auto& filter_data = json_object.at("FilterData").get<glz::generic::object_t>();
 
-            if (filter_name == STR("IncludeInheritance"))
+            if (filter_name == "IncludeInheritance")
             {
-                LiveView::s_include_inheritance = filter_data.get<JSON::Bool>(STR("Enabled")).get();
+                LiveView::s_include_inheritance = filter_data.at("Enabled").get<bool>();
             }
-            else if (filter_name == STR("UseRegexForSearch"))
+            else if (filter_name == "UseRegexForSearch")
             {
-                LiveView::s_use_regex_for_search = filter_data.get<JSON::Bool>(STR("Enabled")).get();
+                LiveView::s_use_regex_for_search = filter_data.at("Enabled").get<bool>();
             }
-            else if (filter_name == STR("ApplySearchFiltersWhenNotSearching"))
+            else if (filter_name == "ApplySearchFiltersWhenNotSearching")
             {
-                LiveView::s_apply_search_filters_when_not_searching = filter_data.get<JSON::Bool>(STR("Enabled")).get();
+                LiveView::s_apply_search_filters_when_not_searching = filter_data.at("Enabled").get<bool>();
             }
-            else if (filter_name == Filter::DefaultObjectsOnly::s_debug_name)
+            else if (filter_name == "SearchByAddress")
             {
-                Filter::DefaultObjectsOnly::s_enabled = filter_data.get<JSON::Bool>(STR("Enabled")).get();
+                LiveView::s_search_by_address = filter_data.at("Enabled").get<bool>();
             }
-            else if (filter_name == Filter::IncludeDefaultObjects::s_debug_name)
+            else if (filter_name == to_string(Filter::DefaultObjectsOnly::s_debug_name))
             {
-                Filter::IncludeDefaultObjects::s_enabled = filter_data.get<JSON::Bool>(STR("Enabled")).get();
+                Filter::DefaultObjectsOnly::s_enabled = filter_data.at("Enabled").get<bool>();
             }
-            else if (filter_name == Filter::InstancesOnly::s_debug_name)
+            else if (filter_name == to_string(Filter::IncludeDefaultObjects::s_debug_name))
             {
-                Filter::InstancesOnly::s_enabled = filter_data.get<JSON::Bool>(STR("Enabled")).get();
+                Filter::IncludeDefaultObjects::s_enabled = filter_data.at("Enabled").get<bool>();
             }
-            else if (filter_name == Filter::NonInstancesOnly::s_debug_name)
+            else if (filter_name == to_string(Filter::InstancesOnly::s_debug_name))
             {
-                Filter::NonInstancesOnly::s_enabled = filter_data.get<JSON::Bool>(STR("Enabled")).get();
+                Filter::InstancesOnly::s_enabled = filter_data.at("Enabled").get<bool>();
             }
-            else if (filter_name == Filter::ClassNamesFilter::s_debug_name)
+            else if (filter_name == to_string(Filter::NonInstancesOnly::s_debug_name))
             {
-                Filter::ClassNamesFilter::b_is_exclude = filter_data.get<JSON::Bool>(STR("IsExclude")).get();
-                auto& class_names = filter_data.get<JSON::Array>(STR("ClassNames"));
+                Filter::NonInstancesOnly::s_enabled = filter_data.at("Enabled").get<bool>();
+            }
+            else if (filter_name == to_string(Filter::ClassNamesFilter::s_debug_name))
+            {
+                Filter::ClassNamesFilter::b_is_exclude = filter_data.at("IsExclude").get<bool>();
+                const auto& class_names = filter_data.at("ClassNames").get<glz::generic::array_t>();
                 json_array_to_filters_list(class_names, Filter::ClassNamesFilter::list_class_names, STR("class name"), Filter::ClassNamesFilter::s_internal_class_names);
             }
-            else if (filter_name == Filter::HasProperty::s_debug_name)
+            else if (filter_name == to_string(Filter::HasProperty::s_debug_name))
             {
-                auto& properties = filter_data.get<JSON::Array>(STR("Properties"));
+                const auto& properties = filter_data.at("Properties").get<glz::generic::array_t>();
                 json_array_to_filters_list(properties, Filter::HasProperty::list_properties, STR("property"), Filter::HasProperty::s_internal_properties);
             }
-            else if (filter_name == Filter::HasPropertyType::s_debug_name)
+            else if (filter_name == to_string(Filter::HasPropertyType::s_debug_name))
             {
-                auto& property_types = filter_data.get<JSON::Array>(STR("PropertyTypes"));
+                const auto& property_types = filter_data.at("PropertyTypes").get<glz::generic::array_t>();
                 json_array_to_filters_list(property_types,
                                            Filter::HasPropertyType::list_property_types,
                                            STR("property type"),
                                            Filter::HasPropertyType::s_internal_property_types);
             }
-            else if (filter_name == Filter::FunctionParamFlags::s_debug_name)
+            else if (filter_name == to_string(Filter::FunctionParamFlags::s_debug_name))
             {
-                Filter::FunctionParamFlags::s_include_return_property = filter_data.get<JSON::Bool>(STR("IncludeReturnProperty")).get();
+                Filter::FunctionParamFlags::s_include_return_property = filter_data.at("IncludeReturnProperty").get<bool>();
                 Filter::FunctionParamFlags::s_checkboxes.fill(false);
-                auto& function_param_flags = filter_data.get<JSON::Array>(STR("FunctionParamFlags"));
-                if (function_param_flags.get().size() != Filter::FunctionParamFlags::s_checkboxes.size())
+                const auto& function_param_flags = filter_data.at("FunctionParamFlags").get<glz::generic::array_t>();
+                if (function_param_flags.size() != Filter::FunctionParamFlags::s_checkboxes.size())
                 {
                     throw std::runtime_error{"Invalid number of function param flag entires in 'filters.meta.json'"};
                 }
-                function_param_flags.for_each([](auto index, JSON::Value& flag) {
-                    if (!flag.is<JSON::Bool>())
+                for (size_t index = 0; index < function_param_flags.size(); ++index)
+                {
+                    const auto& flag = function_param_flags[index];
+                    if (!flag.is_boolean())
                     {
                         throw std::runtime_error{"Invalid flag in 'filters.meta.json'"};
                     }
-                    Filter::FunctionParamFlags::s_checkboxes[index] = flag.as<JSON::Bool>()->get();
-                    return LoopAction::Continue;
-                });
+                    Filter::FunctionParamFlags::s_checkboxes[index] = flag.get<bool>();
+                }
             }
-
-            return LoopAction::Continue;
-        });
+            else if (filter_name == to_string(Filter::MaxValueSize::s_debug_name))
+            {
+                auto number = filter_data.at("Value").as<int64_t>();
+                if (number > std::numeric_limits<int32_t>::max())
+                {
+                    number = std::numeric_limits<int32_t>::max();
+                }
+                Filter::MaxValueSize::s_value = static_cast<int32_t>(number);
+                Filter::MaxValueSize::s_value_buffer = fmt::format("{}", Filter::MaxValueSize::s_value);
+            }
+        }
     }
 
     static auto load_filters_from_disk() -> void
@@ -583,27 +658,26 @@ namespace RC::GUI
         return add_watch(LiveView::WatchIdentifier{function, nullptr}, function);
     }
 
-    static auto serialize_watch_to_json_object(const LiveView::Watch& watch) -> std::unique_ptr<JSON::Object>
+    static auto serialize_watch_to_json_object(const LiveView::Watch& watch) -> glz::generic
     {
-        auto json_object = std::make_unique<JSON::Object>();
+        glz::generic json_object = glz::generic::object_t{};
         switch (watch.acquisition_method)
         {
         case LiveView::Watch::AcquisitionMethod::StaticFindObject: {
             auto object_full_name = watch.container->GetFullName();
             auto object_type_space_location = object_full_name.find(STR(" "));
             auto object_typeless_name = StringType{object_full_name.begin() + object_type_space_location + 1, object_full_name.end()};
-            json_object->new_string(STR("AcquisitionID"), object_typeless_name);
+            json_object["AcquisitionID"] = to_string(object_typeless_name);
             break;
         }
         case LiveView::Watch::AcquisitionMethod::FindFirstOf:
-            json_object->new_string(STR("AcquisitionID"), watch.container->GetClassPrivate()->GetName());
+            json_object["AcquisitionID"] = to_string(watch.container->GetClassPrivate()->GetName());
             break;
         }
-        json_object->new_string(STR("PropertyName"), watch.property_name);
-        json_object->new_number(STR("AcquisitionMethod"), static_cast<int32_t>(watch.acquisition_method));
-        json_object->new_number(STR("WatchType"),
-                                watch.container->IsA<UFunction>() ? static_cast<int32_t>(LiveView::Watch::Type::Function)
-                                                                  : static_cast<int32_t>(LiveView::Watch::Type::Property));
+        json_object["PropertyName"] = to_string(watch.property_name);
+        json_object["AcquisitionMethod"] = static_cast<double>(static_cast<int32_t>(watch.acquisition_method));
+        json_object["WatchType"] = static_cast<double>(watch.container->IsA<UFunction>() ? static_cast<int32_t>(LiveView::Watch::Type::Function)
+                                                                                         : static_cast<int32_t>(LiveView::Watch::Type::Property));
         return json_object;
     }
 
@@ -613,31 +687,37 @@ namespace RC::GUI
         auto legacy_root_directory_path =
                 StringType{UE4SSProgram::get_program().get_legacy_root_directory()} + fmt::format(STR("\\watches\\watches.meta.json"));
 
-        StringType json_file_contents;
         bool is_legacy = !std::filesystem::exists(working_directory_path) && std::filesystem::exists(legacy_root_directory_path);
         auto json_file = File::open(is_legacy ? legacy_root_directory_path : working_directory_path,
                                     File::OpenFor::Reading,
                                     File::OverwriteExistingFile::No,
                                     File::CreateIfNonExistent::Yes);
+        auto json_file_contents = json_file.read_all();
 
         if (json_file_contents.empty())
         {
             return;
         }
 
-        auto json_global_object = JSON::Parser::parse(json_file_contents);
-        const auto& elements = json_global_object->get<JSON::Array>(STR("Watches"));
-        elements.for_each([](JSON::Value& element) {
-            if (!element.is<JSON::Object>())
+        glz::generic json_root{};
+        auto parse_result = glz::read_json(json_root, to_string(json_file_contents));
+        if (parse_result)
+        {
+            throw std::runtime_error{"Failed to parse 'watches.meta.json'"};
+        }
+
+        const auto& elements = json_root["Watches"].get<glz::generic::array_t>();
+        for (const auto& element : elements)
+        {
+            if (!element.is_object())
             {
                 throw std::runtime_error{"Invalid watch in 'watches.meta.json'"};
             }
-            auto& json_watch_object = *element.as<JSON::Object>();
-            auto acquisition_id = json_watch_object.get<JSON::String>(STR("AcquisitionID")).get_view();
-            auto property_name = json_watch_object.get<JSON::String>(STR("PropertyName")).get_view();
-            auto acquisition_method =
-                    static_cast<LiveView::Watch::AcquisitionMethod>(json_watch_object.get<JSON::Number>(STR("AcquisitionMethod")).get<int64_t>());
-            auto watch_type = static_cast<LiveView::Watch::Type>(json_watch_object.get<JSON::Number>(STR("WatchType")).get<int64_t>());
+            const auto& json_watch_object = element.get<glz::generic::object_t>();
+            auto acquisition_id = to_wstring(json_watch_object.at("AcquisitionID").get<std::string>());
+            auto property_name = to_wstring(json_watch_object.at("PropertyName").get<std::string>());
+            auto acquisition_method = static_cast<LiveView::Watch::AcquisitionMethod>(json_watch_object.at("AcquisitionMethod").as<int64_t>());
+            auto watch_type = static_cast<LiveView::Watch::Type>(json_watch_object.at("WatchType").as<int64_t>());
 
             UObject* object{};
             switch (acquisition_method)
@@ -653,7 +733,7 @@ namespace RC::GUI
             }
             if (!object)
             {
-                return LoopAction::Continue;
+                continue;
             }
 
             LiveView::Watch* watch = [&]() -> LiveView::Watch* {
@@ -674,14 +754,12 @@ namespace RC::GUI
 
             if (!watch)
             {
-                return LoopAction::Continue;
+                continue;
             }
 
             watch->load_on_startup = true;
             watch->acquisition_method = acquisition_method;
-
-            return LoopAction::Continue;
-        });
+        }
     }
 
     static auto load_watches_from_disk() -> void
@@ -693,8 +771,8 @@ namespace RC::GUI
 
     static auto internal_save_watches_to_disk() -> void
     {
-        auto json = JSON::Object{};
-        auto& json_uobjects = json.new_array(STR("Watches"));
+        glz::generic json = glz::generic::object_t{};
+        glz::generic::array_t json_watches{};
 
         {
             std::lock_guard<decltype(LiveView::Watch::s_watch_lock)> lock{LiveView::Watch::s_watch_lock};
@@ -704,16 +782,19 @@ namespace RC::GUI
                 {
                     continue;
                 }
-                json_uobjects.add_object(serialize_watch_to_json_object(*watch));
+                json_watches.emplace_back(serialize_watch_to_json_object(*watch));
             }
         }
+        json["Watches"] = std::move(json_watches);
 
         auto json_file = File::open(StringType{UE4SSProgram::get_program().get_working_directory()} + fmt::format(STR("\\watches\\watches.meta.json")),
                                     File::OpenFor::Writing,
                                     File::OverwriteExistingFile::Yes,
                                     File::CreateIfNonExistent::Yes);
-        int32_t json_indent_level{};
-        json_file.write_string_to_file(json.serialize(JSON::ShouldFormat::Yes, &json_indent_level));
+        if (auto result = glz::write<glz::opts{.prettify = true}>(json); result.has_value())
+        {
+            json_file.write_string_to_file(to_wstring(result.value()));
+        }
     }
 
     static auto save_watches_to_disk() -> void
@@ -762,960 +843,6 @@ namespace RC::GUI
         m_is_initialized = true;
     }
 
-    struct ObjectFlagsStringifier
-    {
-        std::string flags_string{};
-        std::vector<std::string> flag_parts{};
-
-        static constexpr const char* popup_context_item_id_raw = "object_raw_flags_menu";
-        static constexpr const char* popup_context_item_id = "object_flags_menu";
-
-        static auto get_raw_flags(UObject* object) -> uint32_t
-        {
-            return static_cast<uint32_t>(object->GetObjectFlags());
-        }
-
-        ObjectFlagsStringifier(UObject* object)
-        {
-            if (object->HasAnyFlags(RF_NoFlags))
-            {
-                flag_parts.emplace_back("RF_NoFlags");
-            }
-            if (object->HasAnyFlags(RF_Public))
-            {
-                flag_parts.emplace_back("RF_Public");
-            }
-            if (object->HasAnyFlags(RF_Standalone))
-            {
-                flag_parts.emplace_back("RF_Standalone");
-            }
-            if (object->HasAnyFlags(RF_MarkAsNative))
-            {
-                flag_parts.emplace_back("RF_MarkAsNative");
-            }
-            if (object->HasAnyFlags(RF_Transactional))
-            {
-                flag_parts.emplace_back("RF_Transactional");
-            }
-            if (object->HasAnyFlags(RF_ClassDefaultObject))
-            {
-                flag_parts.emplace_back("RF_ClassDefaultObject");
-            }
-            if (object->HasAnyFlags(RF_ArchetypeObject))
-            {
-                flag_parts.emplace_back("RF_ArchetypeObject");
-            }
-            if (object->HasAnyFlags(RF_Transient))
-            {
-                flag_parts.emplace_back("RF_Transient");
-            }
-            if (object->HasAnyFlags(RF_MarkAsRootSet))
-            {
-                flag_parts.emplace_back("RF_MarkAsRootSet");
-            }
-            if (object->HasAnyFlags(RF_TagGarbageTemp))
-            {
-                flag_parts.emplace_back("RF_TagGarbageTemp");
-            }
-            if (object->HasAnyFlags(RF_NeedInitialization))
-            {
-                flag_parts.emplace_back("RF_NeedInitialization");
-            }
-            if (object->HasAnyFlags(RF_NeedLoad))
-            {
-                flag_parts.emplace_back("RF_NeedLoad");
-            }
-            if (object->HasAnyFlags(RF_KeepForCooker))
-            {
-                flag_parts.emplace_back("RF_KeepForCooker");
-            }
-            if (object->HasAnyFlags(RF_NeedPostLoad))
-            {
-                flag_parts.emplace_back("RF_NeedPostLoad");
-            }
-            if (object->HasAnyFlags(RF_NeedPostLoadSubobjects))
-            {
-                flag_parts.emplace_back("RF_NeedPostLoadSubobjects");
-            }
-            if (object->HasAnyFlags(RF_NewerVersionExists))
-            {
-                flag_parts.emplace_back("RF_NewerVersionExists");
-            }
-            if (object->HasAnyFlags(RF_BeginDestroyed))
-            {
-                flag_parts.emplace_back("RF_BeginDestroyed");
-            }
-            if (object->HasAnyFlags(RF_FinishDestroyed))
-            {
-                flag_parts.emplace_back("RF_FinishDestroyed");
-            }
-            if (object->HasAnyFlags(RF_BeingRegenerated))
-            {
-                flag_parts.emplace_back("RF_BeingRegenerated");
-            }
-            if (object->HasAnyFlags(RF_DefaultSubObject))
-            {
-                flag_parts.emplace_back("RF_DefaultSubObject");
-            }
-            if (object->HasAnyFlags(RF_WasLoaded))
-            {
-                flag_parts.emplace_back("RF_WasLoaded");
-            }
-            if (object->HasAnyFlags(RF_TextExportTransient))
-            {
-                flag_parts.emplace_back("RF_TextExportTransient");
-            }
-            if (object->HasAnyFlags(RF_LoadCompleted))
-            {
-                flag_parts.emplace_back("RF_LoadCompleted");
-            }
-            if (object->HasAnyFlags(RF_InheritableComponentTemplate))
-            {
-                flag_parts.emplace_back("RF_InheritableComponentTemplate");
-            }
-            if (object->HasAnyFlags(RF_DuplicateTransient))
-            {
-                flag_parts.emplace_back("RF_DuplicateTransient");
-            }
-            if (object->HasAnyFlags(RF_StrongRefOnFrame))
-            {
-                flag_parts.emplace_back("RF_StrongRefOnFrame");
-            }
-            if (object->HasAnyFlags(RF_NonPIEDuplicateTransient))
-            {
-                flag_parts.emplace_back("RF_NonPIEDuplicateTransient");
-            }
-            if (object->HasAnyFlags(RF_Dynamic))
-            {
-                flag_parts.emplace_back("RF_Dynamic");
-            }
-            if (object->HasAnyFlags(RF_WillBeLoaded))
-            {
-                flag_parts.emplace_back("RF_WillBeLoaded");
-            }
-            if (object->HasAnyFlags(RF_HasExternalPackage))
-            {
-                flag_parts.emplace_back("RF_HasExternalPackage");
-            }
-            if (object->HasAnyFlags(RF_AllFlags))
-            {
-                flag_parts.emplace_back("RF_AllFlags");
-            }
-
-            std::for_each(flag_parts.begin(), flag_parts.end(), [&](const std::string& flag_part) {
-                if (!flags_string.empty())
-                {
-                    flags_string.append(", ");
-                }
-                flags_string.append(std::move(flag_part));
-            });
-        }
-    };
-
-    struct ClassFlagsStringifier
-    {
-        std::string flags_string{};
-        std::vector<std::string> flag_parts{};
-
-        static constexpr const char* popup_context_item_id_raw = "class_raw_flags_menu";
-        static constexpr const char* popup_context_item_id = "class_flags_menu";
-
-        static auto get_raw_flags(UClass* object) -> uint32_t
-        {
-            return static_cast<uint32_t>(object->GetClassFlags());
-        }
-
-        ClassFlagsStringifier(UClass* uclass)
-        {
-            if (get_raw_flags(uclass) == 0)
-            {
-                flag_parts.emplace_back("CLASS_None");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Abstract))
-            {
-                flag_parts.emplace_back("CLASS_Abstract");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_DefaultConfig))
-            {
-                flag_parts.emplace_back("CLASS_DefaultConfig");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Config))
-            {
-                flag_parts.emplace_back("CLASS_Config");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Transient))
-            {
-                flag_parts.emplace_back("CLASS_Transient");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Parsed))
-            {
-                flag_parts.emplace_back("CLASS_Parsed");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_MatchedSerializers))
-            {
-                flag_parts.emplace_back("CLASS_MatchedSerializers");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_ProjectUserConfig))
-            {
-                flag_parts.emplace_back("CLASS_ProjectUserConfig");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Native))
-            {
-                flag_parts.emplace_back("CLASS_Native");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_NoExport))
-            {
-                flag_parts.emplace_back("CLASS_NoExport");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_NotPlaceable))
-            {
-                flag_parts.emplace_back("CLASS_NotPlaceable");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_PerObjectConfig))
-            {
-                flag_parts.emplace_back("CLASS_PerObjectConfig");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_ReplicationDataIsSetUp))
-            {
-                flag_parts.emplace_back("CLASS_ReplicationDataIsSetUp");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_EditInlineNew))
-            {
-                flag_parts.emplace_back("CLASS_EditInlineNew");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_CollapseCategories))
-            {
-                flag_parts.emplace_back("CLASS_CollapseCategories");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Interface))
-            {
-                flag_parts.emplace_back("CLASS_Interface");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_CustomConstructor))
-            {
-                flag_parts.emplace_back("CLASS_CustomConstructor");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Const))
-            {
-                flag_parts.emplace_back("CLASS_Const");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_LayoutChanging))
-            {
-                flag_parts.emplace_back("CLASS_LayoutChanging");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_CompiledFromBlueprint))
-            {
-                flag_parts.emplace_back("CLASS_CompiledFromBlueprint");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_MinimalAPI))
-            {
-                flag_parts.emplace_back("CLASS_MinimalAPI");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_RequiredAPI))
-            {
-                flag_parts.emplace_back("CLASS_RequiredAPI");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_DefaultToInstanced))
-            {
-                flag_parts.emplace_back("CLASS_DefaultToInstanced");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_TokenStreamAssembled))
-            {
-                flag_parts.emplace_back("CLASS_TokenStreamAssembled");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_HasInstancedReference))
-            {
-                flag_parts.emplace_back("CLASS_HasInstancedReference");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Hidden))
-            {
-                flag_parts.emplace_back("CLASS_Hidden");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Deprecated))
-            {
-                flag_parts.emplace_back("CLASS_Deprecated");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_HideDropDown))
-            {
-                flag_parts.emplace_back("CLASS_HideDropDown");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_GlobalUserConfig))
-            {
-                flag_parts.emplace_back("CLASS_GlobalUserConfig");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Intrinsic))
-            {
-                flag_parts.emplace_back("CLASS_Intrinsic");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_Constructed))
-            {
-                flag_parts.emplace_back("CLASS_Constructed");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_ConfigDoNotCheckDefaults))
-            {
-                flag_parts.emplace_back("CLASS_ConfigDoNotCheckDefaults");
-            }
-            if (uclass->HasAnyClassFlags(CLASS_NewerVersionExists))
-            {
-                flag_parts.emplace_back("CLASS_NewerVersionExists");
-            }
-
-            std::for_each(flag_parts.begin(), flag_parts.end(), [&](const std::string& flag_part) {
-                if (!flags_string.empty())
-                {
-                    flags_string.append(", ");
-                }
-                flags_string.append(std::move(flag_part));
-            });
-        }
-    };
-
-    struct ClassCastFlagsStringifier
-    {
-        std::string flags_string{};
-        std::vector<std::string> flag_parts{};
-
-        static constexpr const char* popup_context_item_id_raw = "class_cast_raw_flags_menu";
-        static constexpr const char* popup_context_item_id = "class_cast_flags_menu";
-
-         static auto get_raw_flags(UClass* object) -> uint64_t
-        {
-            return static_cast<uint64_t>(object->GetClassCastFlags());
-        }
-
-        ClassCastFlagsStringifier(UClass* uclass)
-        {
-            if (get_raw_flags(uclass) == 0)
-            {
-                flag_parts.emplace_back("CASTCLASS_None");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UField))
-            {
-                flag_parts.emplace_back("CASTCLASS_UField");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FInt8Property))
-            {
-                flag_parts.emplace_back("CASTCLASS_FInt8Property");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UEnum))
-            {
-                flag_parts.emplace_back("CASTCLASS_UEnum");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UStruct))
-            {
-                flag_parts.emplace_back("CASTCLASS_UStruct");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UScriptStruct))
-            {
-                flag_parts.emplace_back("CASTCLASS_UScriptStruct");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UClass))
-            {
-                flag_parts.emplace_back("CASTCLASS_UClass");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FByteProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FByteProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FIntProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FIntProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FFloatProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FFloatProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FUInt64Property))
-            {
-                flag_parts.emplace_back("CASTCLASS_FUInt64Property");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FClassProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FClassProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FUInt32Property))
-            {
-                flag_parts.emplace_back("CASTCLASS_FUInt32Property");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FInterfaceProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FInterfaceProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FNameProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FNameProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FStrProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FStrProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FObjectProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FObjectProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FBoolProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FBoolProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FUInt16Property))
-            {
-                flag_parts.emplace_back("CASTCLASS_FUInt16Property");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UFunction))
-            {
-                flag_parts.emplace_back("CASTCLASS_UFunction");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FStructProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FStructProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FArrayProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FArrayProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FInt64Property))
-            {
-                flag_parts.emplace_back("CASTCLASS_FInt64Property");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FDelegateProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FDelegateProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FNumericProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FNumericProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FMulticastDelegateProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FMulticastDelegateProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FObjectPropertyBase))
-            {
-                flag_parts.emplace_back("CASTCLASS_FObjectPropertyBase");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FWeakObjectProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FWeakObjectProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FLazyObjectProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FLazyObjectProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FSoftObjectProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FSoftObjectProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FTextProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FTextProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FInt16Property))
-            {
-                flag_parts.emplace_back("CASTCLASS_FInt16Property");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FDoubleProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FDoubleProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FSoftClassProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FSoftClassProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UPackage))
-            {
-                flag_parts.emplace_back("CASTCLASS_UPackage");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_ULevel))
-            {
-                flag_parts.emplace_back("CASTCLASS_ULevel");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_AActor))
-            {
-                flag_parts.emplace_back("CASTCLASS_AActor");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_APlayerController))
-            {
-                flag_parts.emplace_back("CASTCLASS_APlayerController");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_APawn))
-            {
-                flag_parts.emplace_back("CASTCLASS_APawn");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_USceneComponent))
-            {
-                flag_parts.emplace_back("CASTCLASS_USceneComponent");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UPrimitiveComponent))
-            {
-                flag_parts.emplace_back("CASTCLASS_UPrimitiveComponent");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_USkinnedMeshComponent))
-            {
-                flag_parts.emplace_back("CASTCLASS_USkinnedMeshComponent");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_USkeletalMeshComponent))
-            {
-                flag_parts.emplace_back("CASTCLASS_USkeletalMeshComponent");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UBlueprint))
-            {
-                flag_parts.emplace_back("CASTCLASS_UBlueprint");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UDelegateFunction))
-            {
-                flag_parts.emplace_back("CASTCLASS_UDelegateFunction");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_UStaticMeshComponent))
-            {
-                flag_parts.emplace_back("CASTCLASS_UStaticMeshComponent");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FMapProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FMapProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FSetProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FSetProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FEnumProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FEnumProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_USparseDelegateFunction))
-            {
-                flag_parts.emplace_back("CASTCLASS_USparseDelegateFunction");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FMulticastInlineDelegateProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FMulticastInlineDelegateProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FMulticastSparseDelegateProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FMulticastSparseDelegateProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FFieldPathProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FFieldPathProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FObjectPtrProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FObjectPtrProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FClassPtrProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FClassPtrProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FLargeWorldCoordinatesRealProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FLargeWorldCoordinatesRealProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FOptionalProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FOptionalProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FVValueProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FVValueProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FVRestValueProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FVRestValueProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FUtf8StrProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FUtf8StrProperty");
-            }
-            if (uclass->HasAnyCastFlag(CASTCLASS_FAnsiStrProperty))
-            {
-                flag_parts.emplace_back("CASTCLASS_FAnsiStrProperty");
-            }
-
-            std::for_each(flag_parts.begin(), flag_parts.end(), [&](const std::string& flag_part) {
-                if (!flags_string.empty())
-                {
-                    flags_string.append(", ");
-                }
-                flags_string.append(flag_part);
-            });
-        }
-    };
-
-    struct FunctionFlagsStringifier
-    {
-        std::string flags_string{};
-        std::vector<std::string> flag_parts{};
-
-        static constexpr const char* popup_context_item_id_raw = "func_raw_flags_menu";
-        static constexpr const char* popup_context_item_id = "func_flags_menu";
-
-        static auto get_raw_flags(UFunction* function) -> uint32_t
-        {
-            return static_cast<uint32_t>(function->GetFunctionFlags());
-        }
-
-        FunctionFlagsStringifier(UFunction* function)
-        {
-            if (get_raw_flags(function) == 0)
-            {
-                flag_parts.emplace_back("FUNC_None");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Final))
-            {
-                flag_parts.emplace_back("FUNC_Final");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_RequiredAPI))
-            {
-                flag_parts.emplace_back("FUNC_RequiredAPI");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_BlueprintAuthorityOnly))
-            {
-                flag_parts.emplace_back("FUNC_BlueprintAuthorityOnly");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_BlueprintCosmetic))
-            {
-                flag_parts.emplace_back("FUNC_BlueprintCosmetic");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Net))
-            {
-                flag_parts.emplace_back("FUNC_Net");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_NetReliable))
-            {
-                flag_parts.emplace_back("FUNC_NetReliable");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_NetRequest))
-            {
-                flag_parts.emplace_back("FUNC_NetRequest");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Exec))
-            {
-                flag_parts.emplace_back("FUNC_Exec");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Native))
-            {
-                flag_parts.emplace_back("FUNC_Native");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Event))
-            {
-                flag_parts.emplace_back("FUNC_Event");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_NetResponse))
-            {
-                flag_parts.emplace_back("FUNC_NetResponse");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Static))
-            {
-                flag_parts.emplace_back("FUNC_Static");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_NetMulticast))
-            {
-                flag_parts.emplace_back("FUNC_NetMulticast");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_UbergraphFunction))
-            {
-                flag_parts.emplace_back("FUNC_UbergraphFunction");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_MulticastDelegate))
-            {
-                flag_parts.emplace_back("FUNC_MulticastDelegate");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Public))
-            {
-                flag_parts.emplace_back("FUNC_Public");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Private))
-            {
-                flag_parts.emplace_back("FUNC_Private");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Protected))
-            {
-                flag_parts.emplace_back("FUNC_Protected");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Delegate))
-            {
-                flag_parts.emplace_back("FUNC_Delegate");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_NetServer))
-            {
-                flag_parts.emplace_back("FUNC_NetServer");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_HasOutParms))
-            {
-                flag_parts.emplace_back("FUNC_HasOutParms");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_HasDefaults))
-            {
-                flag_parts.emplace_back("FUNC_HasDefaults");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_NetClient))
-            {
-                flag_parts.emplace_back("FUNC_NetClient");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_DLLImport))
-            {
-                flag_parts.emplace_back("FUNC_DLLImport");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_BlueprintCallable))
-            {
-                flag_parts.emplace_back("FUNC_BlueprintCallable");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_BlueprintEvent))
-            {
-                flag_parts.emplace_back("FUNC_BlueprintEvent");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_BlueprintPure))
-            {
-                flag_parts.emplace_back("FUNC_BlueprintPure");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_EditorOnly))
-            {
-                flag_parts.emplace_back("FUNC_EditorOnly");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_Const))
-            {
-                flag_parts.emplace_back("FUNC_Const");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_NetValidate))
-            {
-                flag_parts.emplace_back("FUNC_NetValidate");
-            }
-            if (function->HasAnyFunctionFlags(FUNC_AllFlags))
-            {
-                flag_parts.emplace_back("FUNC_AllFlags");
-            }
-
-            std::for_each(flag_parts.begin(), flag_parts.end(), [&](const std::string& flag_part) {
-                if (!flags_string.empty())
-                {
-                    flags_string.append(", ");
-                }
-                flags_string.append(std::move(flag_part));
-            });
-        }
-    };
-
-    struct PropertyFlagsStringifier
-    {
-        std::string flags_string{};
-        std::vector<std::string> flag_parts{};
-
-        PropertyFlagsStringifier(EPropertyFlags flags)
-        {
-            if ((flags & CPF_Edit) != 0)
-            {
-                flag_parts.emplace_back("CPF_Edit");
-            }
-            if ((flags & CPF_ConstParm) != 0)
-            {
-                flag_parts.emplace_back("CPF_ConstParm");
-            }
-            if ((flags & CPF_BlueprintVisible) != 0)
-            {
-                flag_parts.emplace_back("CPF_BlueprintVisible");
-            }
-            if ((flags & CPF_ExportObject) != 0)
-            {
-                flag_parts.emplace_back("CPF_ExportObject");
-            }
-            if ((flags & CPF_BlueprintReadOnly) != 0)
-            {
-                flag_parts.emplace_back("CPF_BlueprintReadOnly");
-            }
-            if ((flags & CPF_Net) != 0)
-            {
-                flag_parts.emplace_back("CPF_Net");
-            }
-            if ((flags & CPF_EditFixedSize) != 0)
-            {
-                flag_parts.emplace_back("CPF_EditFixedSize");
-            }
-            if ((flags & CPF_Parm) != 0)
-            {
-                flag_parts.emplace_back("CPF_Parm");
-            }
-            if ((flags & CPF_OutParm) != 0)
-            {
-                flag_parts.emplace_back("CPF_OutParm");
-            }
-            if ((flags & CPF_ZeroConstructor) != 0)
-            {
-                flag_parts.emplace_back("CPF_ZeroConstructor");
-            }
-            if ((flags & CPF_ReturnParm) != 0)
-            {
-                flag_parts.emplace_back("CPF_ReturnParm");
-            }
-            if ((flags & CPF_DisableEditOnTemplate) != 0)
-            {
-                flag_parts.emplace_back("CPF_DisableEditOnTemplate");
-            }
-            if ((flags & CPF_Transient) != 0)
-            {
-                flag_parts.emplace_back("CPF_Transient");
-            }
-            if ((flags & CPF_Config) != 0)
-            {
-                flag_parts.emplace_back("CPF_Config");
-            }
-            if ((flags & CPF_DisableEditOnInstance) != 0)
-            {
-                flag_parts.emplace_back("CPF_DisableEditOnInstance");
-            }
-            if ((flags & CPF_EditConst) != 0)
-            {
-                flag_parts.emplace_back("CPF_EditConst");
-            }
-            if ((flags & CPF_GlobalConfig) != 0)
-            {
-                flag_parts.emplace_back("CPF_GlobalConfig");
-            }
-            if ((flags & CPF_InstancedReference) != 0)
-            {
-                flag_parts.emplace_back("CPF_InstancedReference");
-            }
-            if ((flags & CPF_DuplicateTransient) != 0)
-            {
-                flag_parts.emplace_back("CPF_DuplicateTransient");
-            }
-            if ((flags & CPF_SubobjectReference) != 0)
-            {
-                flag_parts.emplace_back("CPF_SubobjectReference");
-            }
-            if ((flags & CPF_SaveGame) != 0)
-            {
-                flag_parts.emplace_back("CPF_SaveGame");
-            }
-            if ((flags & CPF_NoClear) != 0)
-            {
-                flag_parts.emplace_back("CPF_NoClear");
-            }
-            if ((flags & CPF_ReferenceParm) != 0)
-            {
-                flag_parts.emplace_back("CPF_ReferenceParm");
-            }
-            if ((flags & CPF_BlueprintAssignable) != 0)
-            {
-                flag_parts.emplace_back("CPF_BlueprintAssignable");
-            }
-            if ((flags & CPF_Deprecated) != 0)
-            {
-                flag_parts.emplace_back("CPF_Deprecated");
-            }
-            if ((flags & CPF_IsPlainOldData) != 0)
-            {
-                flag_parts.emplace_back("CPF_IsPlainOldData");
-            }
-            if ((flags & CPF_RepSkip) != 0)
-            {
-                flag_parts.emplace_back("CPF_RepSkip");
-            }
-            if ((flags & CPF_RepNotify) != 0)
-            {
-                flag_parts.emplace_back("CPF_RepNotify");
-            }
-            if ((flags & CPF_Interp) != 0)
-            {
-                flag_parts.emplace_back("CPF_Interp");
-            }
-            if ((flags & CPF_NonTransactional) != 0)
-            {
-                flag_parts.emplace_back("CPF_NonTransactional");
-            }
-            if ((flags & CPF_EditorOnly) != 0)
-            {
-                flag_parts.emplace_back("CPF_EditorOnly");
-            }
-            if ((flags & CPF_NoDestructor) != 0)
-            {
-                flag_parts.emplace_back("CPF_NoDestructor");
-            }
-            if ((flags & CPF_AutoWeak) != 0)
-            {
-                flag_parts.emplace_back("CPF_AutoWeak");
-            }
-            if ((flags & CPF_ContainsInstancedReference) != 0)
-            {
-                flag_parts.emplace_back("CPF_ContainsInstancedReference");
-            }
-            if ((flags & CPF_AssetRegistrySearchable) != 0)
-            {
-                flag_parts.emplace_back("CPF_AssetRegistrySearchable");
-            }
-            if ((flags & CPF_SimpleDisplay) != 0)
-            {
-                flag_parts.emplace_back("CPF_SimpleDisplay");
-            }
-            if ((flags & CPF_AdvancedDisplay) != 0)
-            {
-                flag_parts.emplace_back("CPF_AdvancedDisplay");
-            }
-            if ((flags & CPF_Protected) != 0)
-            {
-                flag_parts.emplace_back("CPF_Protected");
-            }
-            if ((flags & CPF_BlueprintCallable) != 0)
-            {
-                flag_parts.emplace_back("CPF_BlueprintCallable");
-            }
-            if ((flags & CPF_BlueprintAuthorityOnly) != 0)
-            {
-                flag_parts.emplace_back("CPF_BlueprintAuthorityOnly");
-            }
-            if ((flags & CPF_TextExportTransient) != 0)
-            {
-                flag_parts.emplace_back("CPF_TextExportTransient");
-            }
-            if ((flags & CPF_NonPIEDuplicateTransient) != 0)
-            {
-                flag_parts.emplace_back("CPF_NonPIEDuplicateTransient");
-            }
-            if ((flags & CPF_ExposeOnSpawn) != 0)
-            {
-                flag_parts.emplace_back("CPF_ExposeOnSpawn");
-            }
-            if ((flags & CPF_PersistentInstance) != 0)
-            {
-                flag_parts.emplace_back("CPF_PersistentInstance");
-            }
-            if ((flags & CPF_UObjectWrapper) != 0)
-            {
-                flag_parts.emplace_back("CPF_UObjectWrapper");
-            }
-            if ((flags & CPF_HasGetValueTypeHash) != 0)
-            {
-                flag_parts.emplace_back("CPF_HasGetValueTypeHash");
-            }
-            if ((flags & CPF_NativeAccessSpecifierPublic) != 0)
-            {
-                flag_parts.emplace_back("CPF_NativeAccessSpecifierPublic");
-            }
-            if ((flags & CPF_NativeAccessSpecifierProtected) != 0)
-            {
-                flag_parts.emplace_back("CPF_NativeAccessSpecifierProtected");
-            }
-            if ((flags & CPF_NativeAccessSpecifierPrivate) != 0)
-            {
-                flag_parts.emplace_back("CPF_NativeAccessSpecifierPrivate");
-            }
-            if ((flags & CPF_SkipSerialization) != 0)
-            {
-                flag_parts.emplace_back("CPF_SkipSerialization");
-            }
-
-            std::for_each(flag_parts.begin(), flag_parts.end(), [&](const std::string& flag_part) {
-                if (!flags_string.empty())
-                {
-                    flags_string.append(", ");
-                }
-                flags_string.append(std::move(flag_part));
-            });
-        }
-    };
-
     LiveView::LiveView() : m_function_caller_widget(new UFunctionCallerWidget{})
     {
         m_search_by_name_buffer = new char[m_search_buffer_capacity];
@@ -1746,6 +873,7 @@ namespace RC::GUI
 
     auto LiveView::guobjectarray_iterator(int32_t int_data_1, int32_t int_data_2, const std::function<void(UObject*)>& callable) -> void
     {
+        Filter::s_highlighted_properties.clear();
         UObjectGlobals::ForEachUObjectInRange(int_data_1, int_data_2, [&](UObject* object, ...) {
             // TODO: Stop using the 'HashObject' function when needing the address of an FFieldClassVariant because it's not designed to return an address.
             //       Maybe make the ToFieldClass/ToUClass functions public (append 'Unsafe' to the function names).
@@ -1753,7 +881,7 @@ namespace RC::GUI
             {
                 return LoopAction::Continue;
             }
-            if (s_apply_search_filters_when_not_searching && filter_out_objects(object))
+            if (s_apply_search_filters_when_not_searching && RC_LIVE_VIEW_WAS_FILTERED(filter_out_objects(object)))
             {
                 return LoopAction::Continue;
             }
@@ -1838,13 +966,52 @@ namespace RC::GUI
         }
     }
 
-    auto LiveView::search_by_name() -> void
+    auto LiveView::make_filtered_set(bool ignore_name) -> void
     {
-        Output::send(STR("Searching by name...\n"));
+        if (!ignore_name)
+        {
+            Output::send(STR("Searching by name...\n"));
+        }
         s_name_search_results.clear();
         s_name_search_results_set.clear();
+        Filter::s_highlighted_properties.clear();
+
+        uintptr_t address_to_search_by = 0;
+        if (LiveView::s_search_by_address && !ignore_name)
+        {
+            try
+            {
+                address_to_search_by = std::stoull(LiveView::s_name_to_search_by, nullptr, 16);
+            }
+            catch (std::invalid_argument)
+            {
+                m_modal_search_by_address_error_not_hex = true;
+            }
+            catch (std::out_of_range)
+            {
+                m_modal_search_by_address_error_out_of_range = true;
+            }
+        }
+
         UObjectGlobals::ForEachUObject([&](UObject* object, ...) {
-            attempt_to_add_search_result(object);
+            const auto was_added = attempt_to_add_search_result(object, ignore_name);
+#if RC_LIVE_VIEW_DEBUG_FILTER_RESULTS
+            if (ignore_name)
+            {
+                if (was_added.was_filtered)
+                {
+                    // Note: Feel free to change the code here to output only the object you're interested in using for debugging.
+                    // if (object->GetClassPrivate()->GetName() == STR("GCObjectReferencer"))
+                    {
+                        Output::send(STR("FILTERED BY '{}': '{}'\n"), was_added.reason, object->GetFullName());
+                    }
+                }
+            }
+#endif
+            if (address_to_search_by && !ignore_name)
+            {
+                attempt_to_add_search_by_address_result(address_to_search_by, object);
+            }
             return LoopAction::Continue;
         });
     }
@@ -1871,12 +1038,14 @@ namespace RC::GUI
         }
     }
 
-    auto LiveView::search() -> void
+    auto LiveView::search(bool apply_filters_when_not_searching) -> void
     {
         if (are_listeners_allowed())
         {
             std::string search_buffer{m_search_by_name_buffer};
-            if (search_buffer.empty() || s_apply_search_filters_when_not_searching)
+            if ((search_buffer.empty() || search_buffer == m_default_search_buffer) &&
+                ((apply_filters_when_not_searching && !s_apply_search_filters_when_not_searching) ||
+                 (!apply_filters_when_not_searching && !s_apply_search_filters_when_not_searching)))
             {
                 Output::send(STR("Search all chunks\n"));
                 s_name_to_search_by.clear();
@@ -1885,11 +1054,20 @@ namespace RC::GUI
             }
             else
             {
-                Output::send(STR("Search for: {}\n"), search_buffer.empty() ? STR("") : ensure_str(search_buffer));
-                s_name_to_search_by = search_buffer;
-                m_object_iterator = &LiveView::guobjectarray_by_name_iterator;
-                m_is_searching_by_name = true;
-                search_by_name();
+                if (apply_filters_when_not_searching && s_apply_search_filters_when_not_searching)
+                {
+                    Output::send(STR("Search all chunks (filters applied)\n"));
+                    m_object_iterator = &LiveView::guobjectarray_by_name_iterator;
+                    m_is_searching_by_name = true;
+                }
+                else
+                {
+                    Output::send(STR("Search for: {}\n"), search_buffer.empty() ? STR("") : ensure_str(search_buffer));
+                    s_name_to_search_by = search_buffer;
+                    m_object_iterator = &LiveView::guobjectarray_by_name_iterator;
+                    m_is_searching_by_name = true;
+                }
+                make_filtered_set(apply_filters_when_not_searching && s_apply_search_filters_when_not_searching);
             }
         }
     }
@@ -1955,14 +1133,82 @@ namespace RC::GUI
         ImGui::Text("Properties");
         if (ImGui::TreeNodeEx("Show", ImGuiTreeNodeFlags_SpanFullWidth))
         {
-            for (FProperty* property : ustruct->ForEachProperty())
+            for (FProperty* property : TFieldRange<FProperty>(ustruct, EFieldIterationFlags::IncludeDeprecated))
             {
-                ImGui::TreeNodeEx(to_string(property->GetFullName()).c_str(), ImGuiTreeNodeFlags_Leaf);
-                if (ImGui::IsItemClicked())
+                bool is_struct_property = CastField<FStructProperty>(property) != nullptr;
+                bool is_array_property = CastField<FArrayProperty>(property) != nullptr;
+                if (ImGui::TreeNodeEx(to_string(property->GetFullName()).c_str(), is_struct_property || is_array_property ? 0 : ImGuiTreeNodeFlags_Leaf) &&
+                    (is_struct_property || is_array_property))
                 {
-                    select_property(0, property, AffectsHistory::Yes);
+                    ImGui::Indent();
+                    if (is_struct_property)
+                    {
+                        ImGui::Text("Struct");
+                        if (auto struct_property_struct = CastField<FStructProperty>(property)->GetStruct())
+                        {
+                            if (ImGui::TreeNode(get_object_full_name(struct_property_struct)))
+                            {
+                                render_struct_sub_tree_hierarchy(struct_property_struct);
+                                ImGui::TreePop();
+                            }
+                            else
+                            {
+                                if (ImGui::IsItemClicked())
+                                {
+                                    select_object(0, struct_property_struct->GetObjectItem(), struct_property_struct, AffectsHistory::Yes);
+                                }
+                            }
+                        }
+                    }
+                    else if (is_array_property)
+                    {
+                        ImGui::Text("Inner");
+                        if (auto array_property_inner = CastField<FArrayProperty>(property)->GetInner())
+                        {
+                            bool is_inner_struct = CastField<FStructProperty>(array_property_inner) != nullptr;
+                            if (ImGui::TreeNodeEx(to_string(array_property_inner->GetFullName()).c_str(), is_inner_struct ? 0 : ImGuiTreeNodeFlags_Leaf) &&
+                                is_inner_struct)
+                            {
+                                ImGui::Indent();
+                                ImGui::Text("Struct");
+                                auto inner_struct_property = CastField<FStructProperty>(array_property_inner);
+                                auto inner_struct_property_struct = inner_struct_property->GetStruct();
+                                if (ImGui::TreeNode(get_object_full_name(inner_struct_property_struct)))
+                                {
+                                    render_struct_sub_tree_hierarchy(inner_struct_property_struct);
+                                    ImGui::TreePop();
+                                }
+                                else
+                                {
+                                    if (ImGui::IsItemClicked())
+                                    {
+                                        select_object(0, inner_struct_property_struct->GetObjectItem(), inner_struct_property_struct, AffectsHistory::Yes);
+                                    }
+                                }
+                                ImGui::Unindent();
+                                ImGui::TreePop();
+                            }
+                            else
+                            {
+                                if (ImGui::IsItemClicked())
+                                {
+                                    select_property(0, array_property_inner, AffectsHistory::Yes);
+                                }
+                            }
+                            if (!is_inner_struct) ImGui::TreePop();
+                        }
+                    }
+                    ImGui::Unindent();
+                    ImGui::TreePop();
                 }
-                ImGui::TreePop();
+                else
+                {
+                    if (ImGui::IsItemClicked())
+                    {
+                        select_property(0, property, AffectsHistory::Yes);
+                    }
+                }
+                if (!is_struct_property && !is_array_property) ImGui::TreePop();
             }
             ImGui::TreePop();
         }
@@ -1997,7 +1243,7 @@ namespace RC::GUI
         Output::send(STR("{}\n"), uclass->GetFullName());
 
         ImGui::Text("Properties");
-        for (FProperty* property : uclass->ForEachProperty())
+        for (FProperty* property : TFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeDeprecated))
         {
             if (ImGui::TreeNode(to_string(property->GetFullName()).c_str()))
             {
@@ -2086,7 +1332,46 @@ namespace RC::GUI
         FString property_text{};
         auto property_name = to_string(property->GetName());
         auto container_ptr = property->ContainerPtrToValuePtr<void*>(container);
-        property->ExportTextItem(property_text, container_ptr, container_ptr, static_cast<UObject*>(container), NULL);
+        auto as_struct_property = CastField<FStructProperty>(property);
+        static constexpr auto s_error_too_large = STR("Too large to display on one line! Click to view individual members.");
+        bool editable = true;
+        if (auto as_map_property = CastField<FMapProperty>(property))
+        {
+            auto map = std::bit_cast<FScriptMap*>(container_ptr);
+            if (auto value_as_struct_property = CastField<FStructProperty>(as_map_property->GetValueProp());
+                value_as_struct_property && value_as_struct_property->GetStruct()->GetStructureSize() * map->Num() > Filter::MaxValueSize::s_value)
+            {
+                editable = false;
+                property_text = FString{s_error_too_large};
+            }
+            else
+            {
+                property->ExportTextItem(property_text,
+                                         container_ptr,
+                                         container_ptr,
+                                         container_type == ContainerType::Array ? nullptr : static_cast<UObject*>(container),
+                                         NULL);
+            }
+        }
+        else if (auto as_array_property = CastField<FArrayProperty>(property);
+                 as_array_property && as_array_property->GetSize() * std::bit_cast<FScriptArray*>(container_ptr)->Num() > Filter::MaxValueSize::s_value)
+        {
+            editable = false;
+            property_text = FString{s_error_too_large};
+        }
+        else if (as_struct_property && as_struct_property->GetStruct()->GetStructureSize() > Filter::MaxValueSize::s_value)
+        {
+            editable = false;
+            property_text = FString{s_error_too_large};
+        }
+        else
+        {
+            property->ExportTextItem(property_text,
+                                     container_ptr,
+                                     container_ptr,
+                                     container_type == ContainerType::Array ? nullptr : static_cast<UObject*>(container),
+                                     NULL);
+        }
 
         bool open_edit_value_popup{};
 
@@ -2103,7 +1388,9 @@ namespace RC::GUI
                 }
                 if (ImGui::MenuItem("Copy value"))
                 {
-                    ImGui::SetClipboardText(to_string(property_text.GetCharArray()).c_str());
+                    FString snapshotted_value{};
+                    property->ExportTextItem(snapshotted_value, container_ptr, container_ptr, static_cast<UObject*>(container), NULL);
+                    ImGui::SetClipboardText(to_string(*snapshotted_value).c_str());
                 }
                 if (container_type == ContainerType::Object || container_type == ContainerType::Struct)
                 {
@@ -2174,20 +1461,16 @@ namespace RC::GUI
                         container_type == ContainerType::Array ? fmt::format("").c_str() : fmt::format(" (0x{:X})", property_offset).c_str(),
                         property_name.c_str());
         }
-        if (auto struct_property = CastField<FStructProperty>(property); struct_property && struct_property->GetStruct()->GetFirstProperty())
+        if (as_struct_property && as_struct_property->GetStruct()->GetFirstProperty())
         {
             ImGui::SameLine();
             auto tree_node_id = fmt::format("{}{}", static_cast<void*>(container_ptr), property_name);
-            if (ImGui_TreeNodeEx(fmt::format("{}", to_string(property_text.GetCharArray())).c_str(), tree_node_id.c_str(), ImGuiTreeNodeFlags_NoAutoOpenOnLog))
+            if (ImGui_TreeNodeEx(fmt::format("{}", to_string(*property_text)).c_str(), tree_node_id.c_str(), ImGuiTreeNodeFlags_NoAutoOpenOnLog))
             {
                 render_property_value_context_menu(tree_node_id);
 
-                for (FProperty* inner_property : struct_property->GetStruct()->ForEachProperty())
+                for (FProperty* inner_property : TFieldRange<FProperty>(as_struct_property->GetStruct(), EFieldIterationFlags::IncludeDeprecated))
                 {
-                    FString struct_prop_text_item{};
-                    auto struct_prop_container_ptr = inner_property->ContainerPtrToValuePtr<void*>(container_ptr);
-                    inner_property->ExportTextItem(struct_prop_text_item, struct_prop_container_ptr, struct_prop_container_ptr, nullptr, NULL);
-
                     ImGui::Indent();
                     FProperty* last_struct_prop{};
                     next_item_to_render = render_property_value(inner_property,
@@ -2212,7 +1495,7 @@ namespace RC::GUI
         {
             ImGui::SameLine();
             auto tree_node_id = fmt::format("{}{}", static_cast<void*>(container_ptr), property_name);
-            if (ImGui_TreeNodeEx(fmt::format("{}", to_string(property_text.GetCharArray())).c_str(), tree_node_id.c_str(), ImGuiTreeNodeFlags_NoAutoOpenOnLog))
+            if (ImGui_TreeNodeEx(fmt::format("{}", to_string(*property_text)).c_str(), tree_node_id.c_str(), ImGuiTreeNodeFlags_NoAutoOpenOnLog))
             {
                 render_property_value_context_menu(tree_node_id);
 
@@ -2271,7 +1554,7 @@ namespace RC::GUI
         else
         {
             ImGui::SameLine();
-            ImGui::Text(fmt::format("{}", to_string(property_text.GetCharArray())).c_str());
+            ImGui::Text(fmt::format("{}", to_string(*property_text)).c_str());
             render_property_value_context_menu();
         }
 
@@ -2300,10 +1583,25 @@ namespace RC::GUI
 
         if (open_edit_value_popup)
         {
+            // Re-snapshot the value, because it may not be set due to it being too large of a type to export quickly.
+            // Why is this an empty string ? Wtf ?
+            // It seems it's not empty, but imgui isn't rendering the text properly for some reason, it's rendered as spaces.
+            // When you copy the text, it does copy the actual text, not spaces.
+            // FString snapshotted_property_text{};
+            // property->ExportTextItem(snapshotted_property_text, container_ptr, container_ptr, static_cast<UObject*>(container), NULL);
             // Defer the popup opening - store all necessary context
             s_deferred_property_edit_popup.pending = true;
             s_deferred_property_edit_popup.modal_name = edit_property_value_modal_name;
-            s_deferred_property_edit_popup.initial_value = to_string(property_text.GetCharArray());
+            if (!editable)
+            {
+                s_deferred_property_edit_popup.editable = false;
+                s_deferred_property_edit_popup.initial_value = "Too large to edit!";
+            }
+            else
+            {
+                s_deferred_property_edit_popup.editable = true;
+                s_deferred_property_edit_popup.initial_value = to_string(*property_text);
+            }
             s_deferred_property_edit_popup.property = property;
             s_deferred_property_edit_popup.container = container;
             s_deferred_property_edit_popup.obj = obj;
@@ -2470,6 +1768,39 @@ namespace RC::GUI
         ImGui::EndTable(); // Enum Table
     }
 
+    auto LiveView::render_datatable() -> void
+    {
+        ImGui::Separator();
+        const auto currently_selected_object = get_selected_object();
+        if (!currently_selected_object.first || !currently_selected_object.second)
+        {
+            return;
+        }
+
+        auto data_table = Cast<UDataTable>(currently_selected_object.second);
+        auto row_struct = Cast<UScriptStruct>(data_table->GetRowStruct());
+        auto row_struct_name = row_struct->GetName();
+        const auto& row_map = data_table->GetRowMap();
+
+        for (const auto& row : row_map)
+        {
+            const auto row_name = row.Key.ToString();
+            ImGui::TableNextColumn();
+            if (ImGui_TreeNodeEx(to_string(row_name).c_str(), row.Value, ImGuiTreeNodeFlags_CollapsingHeader))
+            {
+                render_properties(row.Value, row_struct);
+            }
+            if (ImGui::BeginPopupContextItem(to_string(std::format(STR("data-table-context-menu-{}"), row_name)).c_str()))
+            {
+                if (ImGui::MenuItem("Copy"))
+                {
+                    ImGui::SetClipboardText(to_string(row_name).c_str());
+                }
+                ImGui::EndPopup();
+            }
+        }
+    }
+
     auto LiveView::render_bottom_panel() -> void
     {
         const auto currently_selected_object = get_selected_object();
@@ -2482,13 +1813,18 @@ namespace RC::GUI
         {
             render_enum();
         }
+        else if (currently_selected_object.second->IsA<UDataTable>())
+        {
+            render_properties();
+            render_datatable();
+        }
         else
         {
             render_properties();
         }
     }
 
-    auto LiveView::render_properties() -> void
+    auto LiveView::render_properties(void* object_data_override, UStruct* struct_override) -> void
     {
         const auto currently_selected_object = get_selected_object();
         if (!currently_selected_object.first || !currently_selected_object.second)
@@ -2496,8 +1832,9 @@ namespace RC::GUI
             return;
         }
 
-        bool instance_is_struct = currently_selected_object.second->IsA<UStruct>();
-        auto uclass = instance_is_struct ? static_cast<UClass*>(currently_selected_object.second) : currently_selected_object.second->GetClassPrivate();
+        bool instance_is_struct = struct_override ? false : currently_selected_object.second->IsA<UStruct>();
+        auto uclass = instance_is_struct ? static_cast<UClass*>(currently_selected_object.second)
+                                         : (struct_override ? struct_override : currently_selected_object.second->GetClassPrivate());
 
         UObject* next_object_to_render{};
         FUObjectItem* next_object_item_to_render{};
@@ -2517,8 +1854,11 @@ namespace RC::GUI
 
         auto render_property_text = [&](UClass* uclass, FProperty* property) {
             // New
-            auto next_item_variant =
-                    render_property_value(property, ContainerType::Object, currently_selected_object.second, &last_property, &tried_to_open_nullptr_object);
+            auto next_item_variant = render_property_value(property,
+                                                           ContainerType::Object,
+                                                           object_data_override ? object_data_override : currently_selected_object.second,
+                                                           &last_property,
+                                                           &tried_to_open_nullptr_object);
             if (auto object_item = std::get_if<UObject*>(&next_item_variant); object_item && *object_item)
             {
                 next_object_to_render = *object_item;
@@ -2540,14 +1880,14 @@ namespace RC::GUI
         else
         {
             ImGui::Separator();
-            for (FProperty* property : uclass->ForEachProperty())
+            for (FProperty* property : TFieldRange<FProperty>(uclass, EFieldIterationFlags::IncludeDeprecated))
             {
                 all_properties.emplace_back(OrderedProperty{property->GetOffset_Internal(), uclass, property});
             }
 
-            for (UStruct* super_struct : uclass->ForEachSuperStruct())
+            for (UStruct* super_struct : TSuperStructRange(uclass))
             {
-                for (FProperty* property : super_struct->ForEachProperty())
+                for (FProperty* property : TFieldRange<FProperty>(super_struct, EFieldIterationFlags::IncludeDeprecated))
                 {
                     all_properties.emplace_back(OrderedProperty{property->GetOffset_Internal(), super_struct, property});
                 }
@@ -2559,7 +1899,16 @@ namespace RC::GUI
 
             for (const auto& ordered_property : all_properties)
             {
+                const auto should_highlight = Filter::is_highlighted(ordered_property.property);
+                if (should_highlight)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, {1.0f, 0.5f, 0.5f, 1.0f});
+                }
                 render_property_text(static_cast<UClass*>(ordered_property.owner), ordered_property.property);
+                if (should_highlight)
+                {
+                    ImGui::PopStyleColor();
+                }
             }
 
             if (tried_to_open_nullptr_object)
@@ -3026,6 +2375,13 @@ namespace RC::GUI
         {
             m_function_caller_widget->open_widget_deferred();
         }
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_COPY " Dump as JSON"))
+        {
+            TRY([currently_selected_object] {
+                Dumpers::call_generate_object_as_json(currently_selected_object.object);
+            });
+        }
         if (!currently_selected_object.is_object)
         {
             ImGui::EndDisabled();
@@ -3073,7 +2429,7 @@ namespace RC::GUI
     {
         FString live_value_fstring{};
         watch.property->ExportTextItem(live_value_fstring, watch.property->ContainerPtrToValuePtr<void>(watch.container), nullptr, nullptr, 0);
-        auto live_value_string = StringType{live_value_fstring.GetCharArray()};
+        auto live_value_string = StringType{*live_value_fstring};
 
         if (watch.property_value == live_value_string)
         {
@@ -3125,7 +2481,7 @@ namespace RC::GUI
 
         buffer.append(STR("  Locals:\n"));
         bool has_local_params{};
-        for (const auto& param : function->ForEachProperty())
+        for (const auto& param : TFieldRange<FProperty>(function, EFieldIterationFlags::IncludeDeprecated))
         {
             if (param->HasAnyPropertyFlags(CPF_OutParm | CPF_ReturnParm))
             {
@@ -3135,7 +2491,7 @@ namespace RC::GUI
             FString param_text{};
             auto container_ptr = param->ContainerPtrToValuePtr<void*>(context.TheStack.Locals());
             param->ExportTextItem(param_text, container_ptr, container_ptr, std::bit_cast<UObject*>(function), NULL);
-            buffer.append(fmt::format(STR("    {} = {}\n"), param->GetName(), param_text.GetCharArray()));
+            buffer.append(fmt::format(STR("    {} = {}\n"), param->GetName(), *param_text));
         }
         if (!has_local_params)
         {
@@ -3144,7 +2500,7 @@ namespace RC::GUI
 
         bool has_out_params{};
         buffer.append(STR("  Out:\n"));
-        for (const auto& param : function->ForEachProperty())
+        for (const auto& param : TFieldRange<FProperty>(function, EFieldIterationFlags::IncludeDeprecated))
         {
             if (param->HasAnyPropertyFlags(CPF_ReturnParm))
             {
@@ -3158,7 +2514,7 @@ namespace RC::GUI
             FString param_text{};
             auto container_ptr = FindOutParamValueAddress(context.TheStack, param);
             param->ExportTextItem(param_text, container_ptr, container_ptr, std::bit_cast<UObject*>(function), NULL);
-            buffer.append(fmt::format(STR("    {} = {}\n"), param->GetName(), param_text.GetCharArray()));
+            buffer.append(fmt::format(STR("    {} = {}\n"), param->GetName(), *param_text));
         }
         if (!has_out_params)
         {
@@ -3172,7 +2528,7 @@ namespace RC::GUI
             FString return_property_text{};
             auto container_ptr = context.RESULT_DECL;
             return_property->ExportTextItem(return_property_text, container_ptr, container_ptr, std::bit_cast<UObject*>(function), NULL);
-            buffer.append(fmt::format(STR("    {}"), return_property_text.GetCharArray()));
+            buffer.append(fmt::format(STR("    {}"), *return_property_text));
         }
         else
         {
@@ -3278,23 +2634,27 @@ namespace RC::GUI
         }
 
         // Render the deferred property edit modal if it was opened
-        if (s_deferred_property_edit_popup.property && ImGui::BeginPopupModal(s_deferred_property_edit_popup.modal_name.c_str(),
-                                                                              &m_modal_edit_property_value_is_open))
+        if (s_deferred_property_edit_popup.property &&
+            ImGui::BeginPopupModal(s_deferred_property_edit_popup.modal_name.c_str(), &m_modal_edit_property_value_is_open))
         {
             ImGui::Text("Uses the same format as the 'set' UE4 console command.");
             ImGui::Text("The game could crash if the new value is invalid.");
             ImGui::Text("The game can override the new value immediately.");
             ImGui::PushItemWidth(-1.0f);
+            if (!s_deferred_property_edit_popup.editable)
+            {
+                ImGui::BeginDisabled();
+            }
             ImGui::InputText("##CurrentPropertyValue", &m_current_property_value_buffer);
             if (ImGui::Button("Apply"))
             {
                 FOutputDevice placeholder_device{};
-                if (!s_deferred_property_edit_popup.property->ImportText(
-                        FromCharTypePtr<TCHAR>(ensure_str(m_current_property_value_buffer).c_str()),
-                        s_deferred_property_edit_popup.property->ContainerPtrToValuePtr<void>(s_deferred_property_edit_popup.container),
-                        NULL,
-                        s_deferred_property_edit_popup.obj,
-                        &placeholder_device))
+                if (!s_deferred_property_edit_popup.property->ImportText(FromCharTypePtr<TCHAR>(ensure_str(m_current_property_value_buffer).c_str()),
+                                                                         s_deferred_property_edit_popup.property->ContainerPtrToValuePtr<void>(
+                                                                                 s_deferred_property_edit_popup.container),
+                                                                         NULL,
+                                                                         s_deferred_property_edit_popup.obj,
+                                                                         &placeholder_device))
                 {
                     m_modal_edit_property_value_error_unable_to_edit = true;
                     ImGui::OpenPopup("UnableToSetNewPropertyValueError");
@@ -3304,6 +2664,10 @@ namespace RC::GUI
                     ImGui::CloseCurrentPopup();
                     s_deferred_property_edit_popup.property = nullptr; // Clear the deferred state
                 }
+            }
+            if (!s_deferred_property_edit_popup.editable)
+            {
+                ImGui::EndDisabled();
             }
 
             if (ImGui::BeginPopupModal("UnableToSetNewPropertyValueError",
@@ -3323,6 +2687,7 @@ namespace RC::GUI
         if (!m_modal_edit_property_value_is_open)
         {
             s_deferred_property_edit_popup.property = nullptr;
+            s_deferred_property_edit_popup.editable = true;
         }
 
         // Handle deferred enum edit popup
@@ -3486,6 +2851,33 @@ namespace RC::GUI
             ImGui::BeginDisabled();
         }
 
+        // Render search by address error modals
+        if (m_modal_search_by_address_error_not_hex)
+        {
+            ImGui::OpenPopup("UnableToSearchByAddressNotHexError");
+        }
+
+        if (ImGui::BeginPopupModal("UnableToSearchByAddressNotHexError",
+                                   &m_modal_search_by_address_error_not_hex,
+                                   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Query isn't a valid hex number.");
+            ImGui::EndPopup();
+        }
+
+        if (m_modal_search_by_address_error_out_of_range)
+        {
+            ImGui::OpenPopup("UnableToSearchByAddressOutOfRangeError");
+        }
+
+        if (ImGui::BeginPopupModal("UnableToSearchByAddressOutOfRangeError",
+                                   &m_modal_search_by_address_error_out_of_range,
+                                   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Query is a hex number, but is either too big or negative.");
+            ImGui::EndPopup();
+        }
+
         // Update this text if corresponding button's text changes. Textinput width = Spacing + Window margin + Button padding + Button text width
         ImGui::PushItemWidth(-(8.0f + 16.0f + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::CalcTextSize(ICON_FA_COPY " Copy search result").x));
         bool push_inactive_text_color = !m_search_field_cleared;
@@ -3532,12 +2924,15 @@ namespace RC::GUI
             ImGui::SameLine();
             // Making sure the user can't enable filters when not searching, if they are currently actually searching.
             // Otherwise it uses the wrong iterator.
-            auto is_searching_by_name = m_is_searching_by_name;
+            auto is_searching_by_name = m_is_searching_by_name && !s_apply_search_filters_when_not_searching;
             if (is_searching_by_name)
             {
                 ImGui::BeginDisabled();
             }
-            ImGui::Checkbox("Apply filters when not searching", &s_apply_search_filters_when_not_searching);
+            if (ImGui::Checkbox("Apply filters when not searching", &s_apply_search_filters_when_not_searching))
+            {
+                search(true);
+            }
             if (is_searching_by_name)
             {
                 ImGui::EndDisabled();
@@ -3547,17 +2942,24 @@ namespace RC::GUI
                 bool instances_only_enabled = !(Filter::NonInstancesOnly::s_enabled || Filter::DefaultObjectsOnly::s_enabled);
                 bool non_instances_only_enabled = !(Filter::InstancesOnly::s_enabled || Filter::DefaultObjectsOnly::s_enabled);
                 bool default_objects_only_enabled = !(Filter::NonInstancesOnly::s_enabled || Filter::InstancesOnly::s_enabled);
+                bool filters_changed{};
 
                 //  Row 1
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Checkbox("Include inheritance", &s_include_inheritance);
+                if (ImGui::Checkbox("Include inheritance", &s_include_inheritance))
+                {
+                    filters_changed = true;
+                }
                 ImGui::TableNextColumn();
                 if (!instances_only_enabled)
                 {
                     ImGui::BeginDisabled();
                 }
-                ImGui::Checkbox("Instances only", &Filter::InstancesOnly::s_enabled);
+                if (ImGui::Checkbox("Instances only", &Filter::InstancesOnly::s_enabled))
+                {
+                    filters_changed = true;
+                }
                 if (!instances_only_enabled)
                 {
                     ImGui::EndDisabled();
@@ -3566,13 +2968,19 @@ namespace RC::GUI
                 // Row 2
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Checkbox("Function parameter flags", &Filter::FunctionParamFlags::s_enabled);
+                if (ImGui::Checkbox("Function parameter flags", &Filter::FunctionParamFlags::s_enabled))
+                {
+                    filters_changed = true;
+                }
                 ImGui::TableNextColumn();
                 if (!non_instances_only_enabled)
                 {
                     ImGui::BeginDisabled();
                 }
-                ImGui::Checkbox("Non-instances only", &Filter::NonInstancesOnly::s_enabled);
+                if (ImGui::Checkbox("Non-instances only", &Filter::NonInstancesOnly::s_enabled))
+                {
+                    filters_changed = true;
+                }
                 if (!non_instances_only_enabled)
                 {
                     ImGui::EndDisabled();
@@ -3581,13 +2989,19 @@ namespace RC::GUI
                 // Row 3
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Checkbox("Include CDOs", &Filter::IncludeDefaultObjects::s_enabled);
+                if (ImGui::Checkbox("Include CDOs", &Filter::IncludeDefaultObjects::s_enabled))
+                {
+                    filters_changed = true;
+                }
                 ImGui::TableNextColumn();
                 if (!default_objects_only_enabled)
                 {
                     ImGui::BeginDisabled();
                 }
-                ImGui::Checkbox("CDOs only", &Filter::DefaultObjectsOnly::s_enabled);
+                if (ImGui::Checkbox("CDOs only", &Filter::DefaultObjectsOnly::s_enabled))
+                {
+                    filters_changed = true;
+                }
                 if (!default_objects_only_enabled)
                 {
                     ImGui::EndDisabled();
@@ -3596,7 +3010,15 @@ namespace RC::GUI
                 // Row 4
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Checkbox("Use Regex for search", &s_use_regex_for_search);
+                if (ImGui::Checkbox("Use Regex for search", &s_use_regex_for_search))
+                {
+                    filters_changed = true;
+                }
+                ImGui::TableNextColumn();
+                if (ImGui::Checkbox("Match memory address", &s_search_by_address))
+                {
+                    filters_changed = true;
+                }
 
                 // Row 5
                 ImGui::TableNextRow();
@@ -3620,6 +3042,7 @@ namespace RC::GUI
                             Filter::ClassNamesFilter::list_class_names.emplace_back(ensure_str(class_name));
                         }
                     }
+                    filters_changed = true;
                 }
 
                 ImGui::TableNextColumn();
@@ -3637,6 +3060,7 @@ namespace RC::GUI
                             Filter::ClassNamesFilter::list_class_names.emplace_back(ensure_str(class_name));
                         }
                     }
+                    filters_changed = true;
                 }
 
                 // Row 6
@@ -3658,6 +3082,7 @@ namespace RC::GUI
                             Filter::HasProperty::list_properties.emplace_back(ensure_str(property_name));
                         }
                     }
+                    filters_changed = true;
                 }
 
                 // Row 7
@@ -3682,13 +3107,46 @@ namespace RC::GUI
                             }
                         }
                     }
+                    filters_changed = true;
+                }
+                // Row 8
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Maximum Value Size");
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                if (ImGui::InputText("##MaxValueSize", &Filter::MaxValueSize::s_value_buffer))
+                {
+                    int32_t new_value{-1};
+                    try
+                    {
+                        new_value = std::stoi(Filter::MaxValueSize::s_value_buffer);
+                    }
+                    catch (...)
+                    {
+                        if (Filter::MaxValueSize::s_value > 0)
+                        {
+                            new_value = std::numeric_limits<int32_t>::max();
+                        }
+                        else
+                        {
+                            new_value = 0;
+                        }
+                    }
+                    if (new_value < 0)
+                    {
+                        new_value = Filter::MaxValueSize::s_value;
+                    }
+                    Filter::MaxValueSize::s_value = new_value;
+                    Filter::MaxValueSize::s_value_buffer = fmt::format("{}", Filter::MaxValueSize::s_value);
+                    filters_changed = true;
                 }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 if (ImGui::Button(ICON_FA_SEARCH " Refresh search"))
                 {
-                    search();
+                    search(s_apply_search_filters_when_not_searching);
                 }
                 ImGui::TableNextColumn();
                 if (ImGui::Button(ICON_FA_SAVE " Save filters"))
@@ -3700,6 +3158,12 @@ namespace RC::GUI
                     ImGui::BeginTooltip();
                     ImGui::Text("Saves your filters to <UE4SS.dll install location>/liveview/filters.meta.json");
                     ImGui::EndTooltip();
+                }
+
+                if (filters_changed && s_apply_search_filters_when_not_searching)
+                {
+                    // Re-iterating the entire GUObjectArray with new filters if 'Apply filters when not searching' is enabled.
+                    search(true);
                 }
 
                 ImGui::EndTable();
@@ -3937,68 +3401,59 @@ namespace RC::GUI
 
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 0.0f});
 
-        // If filters-while-not-searching are disabled (i.e. normal clipper behavior)
-        if (!s_apply_search_filters_when_not_searching)
+        // 1) Gather objects you actually want to draw
+        std::vector<UObject*> objects_to_draw;
+
+        if (m_is_searching_by_name)
         {
-            // 1) Gather objects you actually want to draw
-            std::vector<UObject*> objects_to_draw;
-
-            if (m_is_searching_by_name)
-            {
-                // If we are searching by name, presumably `s_name_search_results`
-                // already holds only valid objects.
-                objects_to_draw = s_name_search_results;
-            }
-            else
-            {
-                // Otherwise, filter the entire UObjectArray
-                objects_to_draw.reserve(UObjectArray::GetNumElements());
-                for (size_t i = 0; i < UObjectArray::GetNumElements(); i++)
-                {
-
-                    if (FUObjectItem* obj = static_cast<FUObjectItem*>(Container::UnrealVC->UObjectArray_index_to_object(i)))
-                    {
-                        // Skip destroyed/invalid objects here
-                        if (!obj->IsUnreachable())
-                        {
-                            objects_to_draw.push_back(obj->GetUObject());
-                        }
-                    }
-                }
-            }
-
-            // 2) Use clipper with the filtered array size
-            ImGuiListClipper clipper{};
-            clipper.Begin(objects_to_draw.size(), ImGui::GetTextLineHeightWithSpacing());
-
-            // Forces the current opened node to always be rendered by the clipper
-            for (int i = 0; i < objects_to_draw.size(); i++)
-            {
-                if (objects_to_draw[i] == m_currently_opened_tree_node)
-                {
-                    clipper.ForceDisplayRangeByIndices(i, i + 1);
-                    break;
-                }
-            }
-            int last_display_end = 0;
-            float last_position = ImGui::GetCursorPosY();
-            while (clipper.Step())
-            {
-                if (last_position > ImGui::GetCursorPosY())
-                {
-                    // Makes sure the list is contiguous
-                    ImGui::SetCursorPosY(last_position);
-                    clipper.DisplayStart = last_display_end;
-                }
-                do_iteration(clipper.DisplayStart, clipper.DisplayEnd, &objects_to_draw);
-                last_position = ImGui::GetCursorPosY();
-                last_display_end = clipper.DisplayEnd;
-            }
+            // If we are searching by name, presumably `s_name_search_results`
+            // already holds only valid objects.
+            objects_to_draw = s_name_search_results;
         }
         else
         {
-            // "Apply filters when not searching" path
-            do_iteration(0, UObjectArray::GetNumElements());
+            // Otherwise, filter the entire UObjectArray
+            objects_to_draw.reserve(UObjectArray::GetNumElements());
+            for (size_t i = 0; i < UObjectArray::GetNumElements(); i++)
+            {
+
+                if (FUObjectItem* obj = FUObjectArray::IndexToObject(i))
+                {
+                    // Skip destroyed/invalid objects here
+                    if (!obj->IsUnreachable())
+                    {
+                        objects_to_draw.push_back(obj->GetUObject());
+                    }
+                }
+            }
+        }
+
+        // 2) Use clipper with the filtered array size
+        ImGuiListClipper clipper{};
+        clipper.Begin(objects_to_draw.size(), ImGui::GetTextLineHeightWithSpacing());
+
+        // Forces the current opened node to always be rendered by the clipper
+        for (int i = 0; i < objects_to_draw.size(); i++)
+        {
+            if (objects_to_draw[i] == m_currently_opened_tree_node)
+            {
+                clipper.IncludeItemsByIndex(i, i + 1);
+                break;
+            }
+        }
+        int last_display_end = 0;
+        float last_position = ImGui::GetCursorPosY();
+        while (clipper.Step())
+        {
+            if (last_position > ImGui::GetCursorPosY())
+            {
+                // Makes sure the list is contiguous
+                ImGui::SetCursorPosY(last_position);
+                clipper.DisplayStart = last_display_end;
+            }
+            do_iteration(clipper.DisplayStart, clipper.DisplayEnd, &objects_to_draw);
+            last_position = ImGui::GetCursorPosY();
+            last_display_end = clipper.DisplayEnd;
         }
         ImGui::PopStyleVar();
 

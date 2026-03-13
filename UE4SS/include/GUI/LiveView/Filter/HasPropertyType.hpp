@@ -1,9 +1,10 @@
 #pragma once
 
-#include <GUI/LiveView/Filter/SearchFilter.hpp>
-#include <Unreal/UClass.hpp>
-#include <Unreal/NameTypes.hpp>
 #include <vector>
+
+#include <GUI/LiveView/Filter/SearchFilter.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
+#include <Unreal/NameTypes.hpp>
 
 namespace RC::GUI::Filter
 {
@@ -28,15 +29,28 @@ namespace RC::GUI::Filter
             }
 
             bool should_filter_object_out = true;
-            for (const auto& property : as_struct->ForEachPropertyInChain())
-            {
+
+            auto should_filter = [&](FProperty* property) {
                 for (const auto& property_type : list_property_types)
                 {
                     if (property->GetClass().GetFName() == property_type)
                     {
+                        highlight(property);
                         should_filter_object_out = false;
                         break;
                     }
+                }
+            };
+
+            for (FProperty* property : TFieldRange<FProperty>(as_struct, EFieldIterationFlags::IncludeDeprecated))
+            {
+                should_filter(property);
+            }
+            for (UStruct* super_struct : TSuperStructRange(as_struct))
+            {
+                for (FProperty* property : TFieldRange<FProperty>(super_struct, EFieldIterationFlags::IncludeDeprecated))
+                {
+                    should_filter(property);
                 }
             }
             return should_filter_object_out;

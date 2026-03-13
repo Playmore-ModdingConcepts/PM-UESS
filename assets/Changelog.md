@@ -1,15 +1,21 @@
-v3.1.0
+v4.0.0-rc1
 ==============
 TBD
 
-some notes about most important changes such as: 
-- changing of default ue4ss install location, overriding and its backwards compatibility 
-- new build system 
-- linux port 
+**Important:** The default installation layout has changed. All UE4SS files (including UE4SS.dll, settings, and mods) now reside in a `ue4ss` subfolder next to your game executable. Only the proxy DLL (dwmapi.dll) remains in the game's Win64 directory. This keeps your game folder cleaner and makes it easier to manage UE4SS installations. Existing installations in the old location will continue to work for backwards compatibility if the UE4SS dll is replaced directly.
 
 ## New
 
 ### General
+
+Added CMake build system alongside Xmake - ([UE4SS #1067](https://github.com/UE4SS-RE/RE-UE4SS/pull/1067))
+- CMake >= 3.22 is now supported as the default build system
+- Documentation updated to reference CMake build instructions
+- xmake may be deprecated in the future. Meanwhile, we cannot guarantee ABI compatability
+
+Added support for UE Version 5.7
+
+Added support for UE Version 5.6 - ([UE4SS #977](https://github.com/UE4SS-RE/RE-UE4SS/pull/977)) 
 
 Added support for UE Version 5.5 - ([UE4SS #708](https://github.com/UE4SS-RE/RE-UE4SS/pull/708)) 
 
@@ -18,15 +24,26 @@ Added support for UE Version 5.4 - ([UE4SS #503](https://github.com/UE4SS-RE/RE-
 Added basic support for Development/Debug/Test built Unreal Engine games ([UE4SS #607](https://github.com/UE4SS-RE/RE-UE4SS/pull/607)) 
 - To use this functionality, set DebugBuild to true in UE4SS-Settings.ini 
 
+Added command line option to disable RE-UE4SS loading via proxy DLL. Use `--disable-ue4ss` to launch game without UE4SS while keeping the proxy DLL installed. ([UE4SS #1069](https://github.com/UE4SS-RE/RE-UE4SS/pull/1069))
+
+Added command line option to specify custom UE4SS.dll path via proxy DLL. Use `--ue4ss-path <path>` to load UE4SS.dll from a custom location, supporting both absolute and relative paths. This allows developers to easily test different UE4SS builds without modifying files. ([UE4SS #1074](https://github.com/UE4SS-RE/RE-UE4SS/pull/1074))
+
+Added environment variable `UE4SS_MODS_PATHS`. This is a colon separated list of additional directories to load Lua and C++ mods from. ([UE4SS #1069](https://github.com/UE4SS-RE/RE-UE4SS/pull/1070))
+
 Added new build definition "LessEqual421".  Using this definition for games on UE<=4.21 is not mandatory for UE4SS to function, but will ensure the correct alignment is used in containers. 
 
 **BREAKING:** - This also changes the default FName alignment from 8 to 4. 
-- To use this functionality, enter LessEqual421 in the <Target> section of the XMake configuration command. 
+- To use this functionality, enter LessEqual421 in the <Target> section of the XMake configuration command.
+
+**BREAKING:** Changed default `EFindName` parameter for FName constructors from `FNAME_Find` to `FNAME_Add`. 
+- FName constructors will now create new name table entries by default if the name doesn't exist, rather than returning NAME_None
+- To maintain the old behavior, explicitly pass `FNAME_Find` as the second parameter
+- This affects all string-based FName constructors 
 
 Added optional scans for GUObjectHashTables, GNatives and ConsoleManagerSingleton; made FText an optional scan; externed the found GNatives for use by mods([UE4SS #744](https://github.com/UE4SS-RE/RE-UE4SS/pull/744)) 
 - GUObjectHashTables and ConsoleManagerSingleton are currently unused and a WIP.
 
-UE Platform support, which allows for much easier internal implementation of new Unreal classes ([UEPseudo #80](https://github.com/Re-UE4SS/UEPseudo/pull/80)) - narknon, localcc 
+UE Platform support, which allows for much easier internal implementation of new Unreal classes ([UEPseudo #80](https://github.com/Re-UE4SS/UEPseudo/pull/80)) - narknon, localcc
 
 Added new installation method by allowing overriding of the location of the `UE4SS.dll`, [documentation](https://docs.ue4ss.com/installation-guide.html#overriding-install-location). - ([UE4SS #506](https://github.com/UE4SS-RE/RE-UE4SS/pull/506)) - Buckminsterfullerene 
 
@@ -37,6 +54,12 @@ Added custom game configurations for Abiotic Factor ([UE4SS #709](https://github
 Added custom game configurations for Psychonauts 2 ([UE4SS #731](https://github.com/UE4SS-RE/RE-UE4SS/pull/731)) 
 
 Added custom game configurations for Lies of P ([UE4SS #787](https://github.com/UE4SS-RE/RE-UE4SS/pull/787))
+
+Added custom game configurations for Project Silverfish ([UE4SS #1066](https://github.com/UE4SS-RE/RE-UE4SS/pull/1066))
+
+Added custom game configurations for Whiskerwood ([UE4SS #1079](https://github.com/UE4SS-RE/RE-UE4SS/pull/1079))
+
+Added custom game configurations for StarRupture ([UE4SS #1150](https://github.com/UE4SS-RE/RE-UE4SS/pull/1150))
 
 The GUI can now be rendered in the game thread if `RenderMode` in UE4SS-settings.ini is set to
 `EngineTick` or `GameViewportClientTick` ([UE4SS #768](https://github.com/UE4SS-RE/RE-UE4SS/pull/768), [UE4SS #794](https://github.com/UE4SS-RE/RE-UE4SS/pull/794)).
@@ -49,19 +72,121 @@ Add error messages in places where only error codes were previously logged (e.g.
 
 Added `[f: <address_or_module_offset>` section to UE4SS_ObjectDump.txt [UE4SS #866](https://github.com/UE4SS-RE/RE-UE4SS/pull/866) 
 
+Added line in the [docs](https://docs.ue4ss.com/dev/guides/fixing-compatibility-problems.html) to add `FText::FromString(FString&)` as an alternative to `FText::FText(FString&)` for UE5 games - ([UE4SS #1078](https://github.com/UE4SS-RE/RE-UE4SS/pull/1078))
+
+Added `FUObjectItem`, `FUObjectArray`, and `TUObjectArray` to MemberVariableLayout.ini ([UE4SS #????](https://github.com/UE4SS-RE/RE-UE4SS/pull/????))
+- This means we can now support games with a customized GUObjectArray.
+- There are now also sizes, padding, and type name comments to help understand.
+- We've also added a special `UEP_TotalSize` entry to every section.
+- It's currently only crucial for `FUObjectItem`, but in the future, we may use this entry for more types.
+
 ### Live View 
 Added search filter: `IncludeClassNames`. ([UE4SS #472](https://github.com/UE4SS-RE/RE-UE4SS/pull/472)) - Buckminsterfullerene
 
+Added search filter: `Match Memory Address`. ([UE4SS #882](https://github.com/UE4SS-RE/RE-UE4SS/pull/882)) - vitrvvivs
+
 Added ability to call UFunctions directly from the GUI. ([UE4SS #851](https://github.com/UE4SS-RE/RE-UE4SS/pull/851))
 
-### UHT Dumper 
+Added highlights for properties matching the `Has property` and `Has property of type` filters ([UE4SS #1089](https://github.com/UE4SS-RE/RE-UE4SS/pull/1089))
 
-### Lua API 
+Added a `Dump as JSON` button for individual objects, located next to the `Find functions` button ([UE4SS #1112](https://github.com/UE4SS-RE/RE-UE4SS/pull/1112))
+
+### Lua Debugger
+
+Added new Lua Debugger GUI tab with debugging tools for Lua mod development  ([UE4SS #1099](https://github.com/UE4SS-RE/RE-UE4SS/pull/1099))
+- Breakpoint management with hit counts
+- Step debugging (Step Into, Step Over, Step Out, Continue)
+- Call stack viewer with clickable frames
+- Locals and upvalues inspection
+- Global variables browser with search and tree navigation
+- REPL console with command history
+- Script editor
+- Loaded modules viewer
+- Mods management tab to view, enable/disable, and create Lua mods
+
+Added individual mod restart/uninstall/start functionality to Lua Debugger ([UE4SS #1105](https://github.com/UE4SS-RE/RE-UE4SS/pull/1105))
+- Restart and Uninstall buttons for running mods in the Mods tab
+- Start button for non-running mods without requiring a full hot reload
+- Restart/Start button in Script Editor tab for quick mod iteration
+- New file creation dialog with optional auto-require in main.lua
+
+### UHT Dumper
+
+Added support for generating `FUtf8String` and `FAnsiString` properties in UHT-compatible headers ([UE4SS #1015](https://github.com/UE4SS-RE/RE-UE4SS/pull/1015))
+
+### Lua API
+
+Added support for `FUtf8String` and `FAnsiString` Unreal string types with string manipulation API ([UE4SS #1015](https://github.com/UE4SS-RE/RE-UE4SS/pull/1015))
+- Refactored FString implementation to use unified `TLuaStringBase` template for code reuse and consistency
+
+Added global functions for mod management ([UE4SS #1105](https://github.com/UE4SS-RE/RE-UE4SS/pull/1105))
+- `RestartCurrentMod()` - Restart the currently running mod
+- `UninstallCurrentMod()` - Uninstall the currently running mod
+- `RestartMod(ModName)` - Restart another mod by name
+- `UninstallMod(ModName)` - Uninstall another mod by name
+
+Added comprehensive Delayed Action System for game-thread timer management ([UE4SS #1128](https://github.com/UE4SS-RE/RE-UE4SS/pull/1128))
+- New execution functions:
+  - `ExecuteInGameThreadWithDelay(delayMs, callback)` - Execute after delay, returns handle
+  - `ExecuteInGameThreadWithDelay(handle, delayMs, callback)` - UE Delay-style (only executes if handle not active)
+  - `RetriggerableExecuteInGameThreadWithDelay(handle, delayMs, callback)` - Resets timer if called again (debouncing)
+  - `LoopInGameThreadWithDelay(delayMs, callback)` - Repeating timer with handle
+  - `ExecuteInGameThreadAfterFrames(frames, callback)` - Frame-based delay (requires EngineTick)
+  - `LoopInGameThreadAfterFrames(frames, callback)` - Frame-based repeating timer
+  - `MakeActionHandle()` - Generate unique handle for use with delay functions
+- Timer control functions:
+  - `CancelDelayedAction(handle)` - Cancel a pending action
+  - `PauseDelayedAction(handle)` - Pause a timer
+  - `UnpauseDelayedAction(handle)` - Resume a paused timer
+  - `ResetDelayedActionTimer(handle)` - Restart with original delay
+  - `SetDelayedActionTimer(handle, newDelayMs)` - Change delay and restart
+  - `ClearAllDelayedActions()` - Cancel all actions for current mod
+- Query functions:
+  - `IsValidDelayedActionHandle(handle)` - Check if handle exists
+  - `IsDelayedActionActive(handle)` - Check if timer is running
+  - `IsDelayedActionPaused(handle)` - Check if timer is paused
+  - `GetDelayedActionRate(handle)` - Get configured delay
+  - `GetDelayedActionTimeRemaining(handle)` - Get remaining time
+  - `GetDelayedActionTimeElapsed(handle)` - Get elapsed time
+- New global variables: `EngineTickAvailable`, `ProcessEventAvailable`
+- New enum: `EGameThreadMethod` with `ProcessEvent` and `EngineTick` values
+- `ExecuteInGameThread` now accepts optional second parameter for execution method
+- Per-mod action ownership ensures mods can only control their own timers
+- **Deprecates:** `ExecuteAsync` and `LoopAsync` (still work but lack control features)
 
 **Updated Lua version to 5.4.7** ([UE4SS #887](https://github.com/UE4SS-RE/RE-UE4SS/pull/887))
 - This is necessary to compile with Clang.
 
+ForEach loops now support early termination by returning `true` from callbacks ([UE4SS #1058](https://github.com/UE4SS-RE/RE-UE4SS/pull/1058))
+- Applies to `TArray:ForEach`, `TMap:ForEach`, `TSet:ForEach`, and `UDataTable:ForEachRow`
+- Fully backward compatible - existing callbacks without return values continue to work
+
+Added `UDataTable` support to Lua API. ([UE4SS #997](https://github.com/UE4SS-RE/RE-UE4SS/pull/997))
+- Find rows by name with `DataTable:FindRow(RowName)`
+- Get all rows with `DataTable:GetAllRows()` 
+- Iterate rows with `DataTable:ForEachRow(Callback)`
+- Add/remove rows dynamically with `DataTable:AddRow(RowName, RowData)` and `DataTable:RemoveRow(RowName)`
+- Access row names with `DataTable:GetRowNames()`
+- Get the entire row map with `DataTable:GetRowMap()`
+- Clear all rows with `DataTable:EmptyTable()`
+- Get row count with `#DataTable` operator
+
+Enhanced TArray support to enable round-trip functionality ([UE4SS #992](https://github.com/UE4SS-RE/RE-UE4SS/pull/992))
+- TArray userdata can now be passed as function parameters
+- Improved handling of empty arrays and nil values
+- Fixed proper element copying when passing arrays between Lua and C++
+
+Added `TSet` implementation. [UE4SS #883](https://github.com/UE4SS-RE/RE-UE4SS/pull/883)
+
 Added `TMap` implementation. [UE4SS #755](https://github.com/UE4SS-RE/RE-UE4SS/issues/755)
+
+Enhanced TMap support to enable round-trip functionality [UE4SS #933](https://github.com/UE4SS-RE/RE-UE4SS/issues/993)
+- TMap userdata can now be passed as function parameters
+- Improved handling of empty maps and nil values
+- Fixed proper key-value pair copying when passing maps between Lua and C++
+- Added proper rehashing to ensure map integrity after copying
+
+Added Lua delegate property support with Add/Remove/Clear/GetBindings/Broadcast methods. See [DelegateProperty](https://docs.ue4ss.com/lua-api/classes/delegateproperty.html), [MulticastDelegateProperty](https://docs.ue4ss.com/lua-api/classes/multicastdelegateproperty.html), and [MulticastSparseDelegateProperty](https://docs.ue4ss.com/lua-api/classes/multicastsparsedelegateproperty.html). [#1073](https://github.com/UE4SS-RE/RE-UE4SS/pull/1073)
 
 Added global function `CreateInvalidObject`, which returns an invalid UObject. ([UE4SS #652](https://github.com/UE4SS-RE/RE-UE4SS/issues/652))  
 
@@ -80,6 +205,10 @@ Added custom module searcher with UTF-8 path support for Lua `require()` ([UE4SS
 - Fixed `IterateGameDirectories` to properly handle UTF-8 paths and Unicode characters
 - Fixed `CreateLogicModsDirectory` to properly create directories with Unicode paths and handle parent directory creation
 - Fixed global Lua `print` function to properly handle UTF-8 string conversion
+
+Added support for `UScriptStruct` when using `RegisterCustomProprety` ([UE4SS #1036](https://github.com/UE4SS-RE/RE-UE4SS/pull/1036))
+
+Added support for handling structs as userdata (Fixed `StructData as userdata is not yet implemented`). ([UE4SS #1169](https://github.com/UE4SS-RE/RE-UE4SS/pull/1169)) - Corporalwill123
 
 #### Types.lua [PR #650](https://github.com/UE4SS-RE/RE-UE4SS/pull/650) 
 - Added `NAME_None` definition 
@@ -111,7 +240,15 @@ Added custom module searcher with UTF-8 path support for Lua `require()` ([UE4SS
 
 - Added annotation for function `FText` to Types.lua. ([UE4SS #788](https://github.com/UE4SS-RE/RE-UE4SS/pull/788))
 
+- Removed cache for `GetPlayerController` and `GetWorld` [PR #1047](https://github.com/UE4SS-RE/RE-UE4SS/pull/1047)
+
 ### C++ API 
+
+Added `UDataTable` class to C++ API. ([UE4SS #997](https://github.com/UE4SS-RE/RE-UE4SS/pull/997))
+- Full DataTable row access with `FindRow<T>()`, `GetAllRows<T>()`, and `ForEachRow<T>()`
+- Row manipulation with `AddRow()`, `RemoveRow()`, and `EmptyTable()`
+- Direct implementations that work across all UE versions without relying on virtual functions
+
 Key binds created with `UE4SSProgram::register_keydown_event` end up being duplicated upon mod hot-reload.  
 - To fix this, `CppUserModBase::register_keydown_event` has been introduced.  
 - It's used exactly the same way except without the `UE4SSProgram::` part. ([UE4SS #446](https://github.com/UE4SS-RE/RE-UE4SS/pull/446)) 
@@ -165,9 +302,11 @@ Added improved string and path conversion utilities with proper UTF-8 support ([
 
 ### General 
 
-Updated ImGui from v1.89 to v1.91.9b for improved functionality and Clang compatability 
+Updated ImGui from v1.89 to v1.92.1 for improved functionality and Clang compatability 
 
 Updated ImGuiTextEdit to support newest ImGui API 
+
+Updated fmt library to 11.2.0
 
 Changed the default location of the UE4SS release assets to be in `game executable directory/ue4ss/`. This change is backwards compatible with the old location. ([UE4SS #506](https://github.com/UE4SS-RE/RE-UE4SS/pull/506)) - Buckminsterfullerene 
 
@@ -180,6 +319,12 @@ release ([UE4SS #779](https://github.com/UE4SS-RE/RE-UE4SS/pull/779))
 
 Removed some development mods, `README.md` & `Changelog.md` from non-zDev release, added `LICENCE` file to both release types ([UE4SS #830](https://github.com/UE4SS-RE/RE-UE4SS/pull/830))
 
+The execution of the game is now paused durin the first AOB scan, and then resumed to complete potential further scans and initialization. ([UE4SS #985](https://github.com/UE4SS-RE/RE-UE4SS/pull/985))
+
+Removed the FText constructor AOB, replaced it with more consistent non-AOB method of constructing FText instances ([UE4SS #1139](https://github.com/UE4SS-RE/RE-UE4SS/pull/1139))
+
+Made the scan for FName::ToString optional. ([UE4SS #1175](https://github.com/UE4SS-RE/RE-UE4SS/pull/1175) - [UEPseudo 169](https://github.com/Re-UE4SS/UEPseudo/pull/169))
+
 ### Live View 
 Fixed the majority of the lag ([UE4SS #512](https://github.com/UE4SS-RE/RE-UE4SS/pull/512)) 
 
@@ -188,6 +333,10 @@ Added support for watching ArrayProperty and StructProperty ([UE4SS #419](https:
 The search filter `ExcludeClassName` can now be found in the `IncludeClassNames` dropdown list. ([UE4SS #472](https://github.com/UE4SS-RE/RE-UE4SS/pull/472)) - Buckminsterfullerene 
 
 The following search filters now allow multiple values, with each value separated by a comma: `IncludeClassNames`, `ExcludeClassNames`, `HasProperty`, `HasPropertyType`. ([UE4SS #472](https://github.com/UE4SS-RE/RE-UE4SS/pull/472)) - Buckminsterfullerene 
+
+Large structs that cause FPS problems no longer render, but you can still click on the struct to render each individual property of the struct. ([UE4SS #1080](https://github.com/UE4SS-RE/RE-UE4SS/pull/1080)) 
+
+Large performance increase when `Apply filters when not searching` is enabled ([UE4SS #1090](https://github.com/UE4SS-RE/RE-UE4SS/pull/1090)) 
 
 ### UHT Dumper 
 
@@ -206,6 +355,10 @@ Improved performance of script hooks created with `RegisterHook`, and
 **BREAKING:** `AActor:GetWorld()` and `AActor:GetLevel()` functions are now returning an invalid `UObject` instead of `nil`. ([UE4SS #810](https://github.com/UE4SS-RE/RE-UE4SS/pull/810))
 
 Types with `get` or `Get` functions now have both variants. ([UE4SS #877](https://github.com/UE4SS-RE/RE-UE4SS/pull/877))
+
+The `NotifyOnNewObject` function now works even if the supplied class hasn't yet been loaded. ([UE4SS #1134](https://github.com/UE4SS-RE/RE-UE4SS/pull/1134))
+
+Improved error messages when improperly indexing into `LocalUnrealParam`, and `RemoteUnrealParam` without first calling `Get`. ([UE4SS #1154](https://github.com/UE4SS-RE/RE-UE4SS/pull/1154))
 
 #### UEHelpers [UE4SS #650](https://github.com/UE4SS-RE/RE-UE4SS/pull/650) 
 - Increased version to 3
@@ -256,6 +409,10 @@ Fixed `attempt to index a nil value (global 'NewController')` error in `SplitScr
 Fixed the GUI not closing properly with CTRL + O when OpenGL is enabled in
 `UE4SS-settings.ini`. ([UE4SS #780](https://github.com/UE4SS-RE/RE-UE4SS/pull/780))
 
+Fixed PalServer crashing when debug console is enabled in `UE4SS-settings.ini` ([UE4SS #1160](https://github.com/UE4SS-RE/RE-UE4SS/pull/1160)) - Okaetsu
+
+Fixed PalServer console having broken text when running under Proton/Wine ([UE4SS #1160](https://github.com/UE4SS-RE/RE-UE4SS/pull/1160)) - Okaetsu
+
 ### Live View 
 Fixed the "Write to file" checkbox not working for functions in the `Watches` tab ([UE4SS #419](https://github.com/UE4SS-RE/RE-UE4SS/pull/419)) 
 
@@ -267,6 +424,21 @@ Fixed crash caused by using invalid iterator. ([UE4SS #771](https://github.com/U
 
 Fixed opened object getting clipped too early ([UE4SS #814](https://github.com/UE4SS-RE/RE-UE4SS/pull/814)) -
 Corporalwill123
+
+Made StructProperty and ArrayProperty Expandable, making contained properties directly viewable ([UE4SS #943](https://github.com/UE4SS-RE/RE-UE4SS/pull/943)) -
+Corporalwill123
+
+Fixed crash on warning in dumpers and generators ([UE4SS #976](https://github.com/UE4SS-RE/RE-UE4SS/pull/976))
+
+Fixed crash on expanding arrays ([UE4SS #1082](https://github.com/UE4SS-RE/RE-UE4SS/pull/1082))
+
+Fixed broken filters: `Include CDOs` & `CDOs only` ([UE4SS #1089](https://github.com/UE4SS-RE/RE-UE4SS/pull/1089))
+
+Fixed the `Include inheritance` filter taking precedence over other filters, causing them to not apply ([UE4SS #1089](https://github.com/UE4SS-RE/RE-UE4SS/pull/1089))
+
+Fixed the `Refresh search` button sometimes not working correctly ([UE4SS #1089](https://github.com/UE4SS-RE/RE-UE4SS/pull/1089))
+
+Fixed filters incorrectly being applied when not searching ([UE4SS #1089](https://github.com/UE4SS-RE/RE-UE4SS/pull/1089))
 
 ### UHT Dumper 
 Fix SetupAttachment implementations randomly changing order ([UE4SS #606](https://github.com/UE4SS-RE/RE-UE4SS/pull/606)) - Buckminsterfullerene 
@@ -314,6 +486,14 @@ names. ([UE4SS #827](https://github.com/UE4SS-RE/RE-UE4SS/pull/827)
 
 Fixed an error with Object properties causing stack corruption. ([UE4SS #939](https://github.com/UE4SS-RE/RE-UE4SS/pull/939)
 
+Fixed UEHelpers sometimes causing a runtime error. ([UE4SS #987](https://github.com/UE4SS-RE/RE-UE4SS/pull/987)
+
+Fixed callbacks only working for the first registrant of several hooks. ([UE4SS #1143](https://github.com/UE4SS-RE/RE-UE4SS/pull/1143)
+
+Fixed callbacks being executed in the wrong thread. ([UE4SS #1170](https://github.com/UE4SS-RE/RE-UE4SS/pull/1170)
+
+Fixed UFunction and UClass properly inheriting from UStruct in Lua. ([UE4SS #1158](https://github.com/UE4SS-RE/RE-UE4SS/pull/1158)) - Corporalwill123
+
 ### C++ API 
 Fixed a crash caused by a race condition enabled by C++ mods using `UE4SS_ENABLE_IMGUI` in their constructor ([UE4SS #481](https://github.com/UE4SS-RE/RE-UE4SS/pull/481)) 
 
@@ -338,6 +518,35 @@ Fixed `LoadMod` function issue that variables would go out-of-scope in the `Exec
 
 ### Added 
 ```ini
+[Overrides]
+; Additional mods directories to load mods from
+; Use + prefix to add a directory, - prefix to remove
+; Can be relative to working directory or absolute paths
+; Example:
+;   +ModsFolderPaths = ../SharedMods
+;   +ModsFolderPaths = C:/MyMods
+;   -ModsFolderPaths = ../SharedMods
+; Default: none
+
+; Path to a specific mods.txt file to use as the controlling mod list.
+; If set, ONLY this mods.txt will be parsed instead of mods.txt from all mod directories.
+; Can be relative to working directory or an absolute path.
+; Example: ControllingModsTxt = ../MyMods/mods.txt
+; Default: Empty (parse mods.txt from all mod directories)
+ControllingModsTxt =
+
+[General]
+; The key that will trigger a reload of all mods.
+; The CTRL key is always required.
+; Valid values (case-insensitive): Anything from Mods/Keybinds/Scripts/main.lua
+; Default: R
+HotReloadKey = R
+
+; The default method for converting FName to string.
+; Valid values (case-insensitive): Scan, Conv_NameToString
+; Default: Scan
+DefaultFNameToStringMethod = Scan
+
 [EngineVersionOverride]
 ; True if the game is built as Debug, Development, or Test.
 ; Default: false
@@ -356,6 +565,9 @@ HookLoadMap = 1
 HookAActorTick = 1
 HookEngineTick = 1
 HookGameViewportClientTick = 1
+HookUObjectProcessEvent = 1
+HookProcessConsoleExec = 1
+HookUStructLink = 1
 ```
 
 ### Removed

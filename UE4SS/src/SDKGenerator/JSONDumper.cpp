@@ -1,14 +1,13 @@
 #include <DynamicOutput/DynamicOutput.hpp>
-#include <JSON/JSON.hpp>
+#include <glaze/glaze.hpp>
 #include <SDKGenerator/Common.hpp>
 #include <SDKGenerator/JSONDumper.hpp>
 #include <Timer/ScopedTimer.hpp>
 #include <UE4SSProgram.hpp>
 #pragma warning(disable : 4005)
-#include <Unreal/FProperty.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/UAssetRegistry.hpp>
-#include <Unreal/UClass.hpp>
-#include <Unreal/UFunction.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #pragma warning(default : 4005)
 
 namespace RC::UEGenerator::JSONDumper
@@ -75,8 +74,8 @@ namespace RC::UEGenerator::JSONDumper
 
     auto static should_skip_property(FProperty* property) -> bool
     {
-        static FName uber_graph_frame_name = FName(STR("UberGraphFrame"));
-        static FName default_scene_root_name = FName(STR("DefaultSceneRoot"));
+        static FName uber_graph_frame_name = FName(STR("UberGraphFrame"), FNAME_Find);
+        static FName default_scene_root_name = FName(STR("DefaultSceneRoot"), FNAME_Find);
 
         if (property->HasAnyPropertyFlags(Unreal::EPropertyFlags::CPF_ReturnParm))
         {
@@ -104,12 +103,12 @@ namespace RC::UEGenerator::JSONDumper
 
     auto static should_skip_general_function(UFunction* function) -> bool
     {
-        static FName receive_name = FName(STR("Receive"));
-        static FName receive_typo_name = FName(STR("Recieve"));
-        static FName receive_begin_play_name = FName(STR("ReceiveBeginPlay"));
-        static FName receive_destroyed_name = FName(STR("ReceiveDestroyedPlay"));
-        static FName receive_tick_name = FName(STR("ReceiveTick"));
-        static FName user_construction_script_name = FName(STR("UserConstructionScript"));
+        static FName receive_name = FName(STR("Receive"), FNAME_Find);
+        static FName receive_typo_name = FName(STR("Recieve"), FNAME_Find);
+        static FName receive_begin_play_name = FName(STR("ReceiveBeginPlay"), FNAME_Find);
+        static FName receive_destroyed_name = FName(STR("ReceiveDestroyedPlay"), FNAME_Find);
+        static FName receive_tick_name = FName(STR("ReceiveTick"), FNAME_Find);
+        static FName user_construction_script_name = FName(STR("UserConstructionScript"), FNAME_Find);
 
         FName function_fname = function->GetNamePrivate();
         if (function_fname.Equals(receive_name))
@@ -192,7 +191,7 @@ namespace RC::UEGenerator::JSONDumper
         UAssetRegistry::LoadAllAssets();
 
         Output::send(STR("Dumping to JSON file\n"));
-        auto json = JSON::Array{};
+        glz::generic::array_t json_array{};
 
         UObjectGlobals::ForEachUObject([&](void* raw_object, int32_t chunk_index, int32_t object_index) {
             if (!raw_object)
@@ -210,19 +209,19 @@ namespace RC::UEGenerator::JSONDumper
 
             object_name.erase(object_name.size() - 2, 2);
 
-            auto& bp_class = json.new_object();
-            bp_class.new_string(STR("bp_class"), object_name);
+            glz::generic bp_class = glz::generic::object_t{};
+            bp_class["bp_class"] = to_string(object_name);
             if (auto* super_struct = object_as_class->GetSuperStruct(); super_struct)
             {
-                bp_class.new_string(STR("inherits"), super_struct->GetName());
+                bp_class["inherits"] = to_string(super_struct->GetName());
             }
             else
             {
-                bp_class.new_null(STR("inherits"));
+                bp_class["inherits"] = nullptr;
             }
 
-            auto& events = bp_class.new_array(STR("events"));
-            for (UFunction* event_function : object_as_class->ForEachFunction())
+            glz::generic::array_t events_array{};
+            for (UFunction* event_function : TFieldRange<UFunction>(object_as_class, EFieldIterationFlags::None))
             {
                 if (should_skip_general_function(event_function))
                 {
@@ -239,69 +238,79 @@ namespace RC::UEGenerator::JSONDumper
                     continue;
                 }
 
-                auto& bp_events = events.new_object();
-                bp_events.new_string(STR("name"), event_name);
+                glz::generic bp_event = glz::generic::object_t{};
+                bp_event["name"] = to_string(event_name);
 
-                auto& bp_event_args = bp_events.new_array(STR("args"));
-                for (FProperty* param : event_function->ForEachProperty())
+                glz::generic::array_t bp_event_args_array{};
+                for (FProperty* param : TFieldRange<FProperty>(event_function, EFieldIterationFlags::IncludeDeprecated))
                 {
                     if (should_skip_property(param))
                     {
                         continue;
                     }
 
-                    auto& bp_event_arg = bp_event_args.new_object();
-                    bp_event_arg.new_string(STR("name"), param->GetName());
-                    bp_event_arg.new_string(STR("type"), generate_property_cxx_name(param, true, event_function));
+                    glz::generic bp_event_arg = glz::generic::object_t{};
+                    bp_event_arg["name"] = to_string(param->GetName());
+                    bp_event_arg["type"] = to_string(generate_property_cxx_name(param, true, event_function));
                     bool is_out = param->HasAnyPropertyFlags(EPropertyFlags::CPF_OutParm) && !param->HasAnyPropertyFlags(EPropertyFlags::CPF_ConstParm);
-                    bp_event_arg.new_bool(STR("is_out"), is_out);
-                    bp_event_arg.new_bool(STR("is_return"), param->HasAnyPropertyFlags(Unreal::EPropertyFlags::CPF_ReturnParm));
+                    bp_event_arg["is_out"] = is_out;
+                    bp_event_arg["is_return"] = param->HasAnyPropertyFlags(Unreal::EPropertyFlags::CPF_ReturnParm);
+                    bp_event_args_array.emplace_back(std::move(bp_event_arg));
                 }
+                bp_event["args"] = std::move(bp_event_args_array);
+                events_array.emplace_back(std::move(bp_event));
             }
+            bp_class["events"] = std::move(events_array);
 
-            auto& functions = bp_class.new_array(STR("functions"));
-            for (UFunction* function : object_as_class->ForEachFunction())
+            glz::generic::array_t functions_array{};
+            for (UFunction* function : TFieldRange<UFunction>(object_as_class, EFieldIterationFlags::None))
             {
                 if (should_skip_function(function))
                 {
                     continue;
                 }
 
-                auto& bp_function = functions.new_object();
-                bp_function.new_string(STR("name"), function->GetName());
+                glz::generic bp_function = glz::generic::object_t{};
+                bp_function["name"] = to_string(function->GetName());
 
-                auto& bp_function_args = bp_function.new_array(STR("args"));
-                for (FProperty* param : function->ForEachProperty())
+                glz::generic::array_t bp_function_args_array{};
+                for (FProperty* param : TFieldRange<FProperty>(function, EFieldIterationFlags::IncludeDeprecated))
                 {
                     if (should_skip_property(param))
                     {
                         continue;
                     }
 
-                    auto& bp_function_arg = bp_function_args.new_object();
-                    bp_function_arg.new_string(STR("name"), param->GetName());
-                    bp_function_arg.new_string(STR("type"), generate_property_cxx_name(param, true, function));
+                    glz::generic bp_function_arg = glz::generic::object_t{};
+                    bp_function_arg["name"] = to_string(param->GetName());
+                    bp_function_arg["type"] = to_string(generate_property_cxx_name(param, true, function));
                     bool is_out = param->HasAnyPropertyFlags(EPropertyFlags::CPF_OutParm) && !param->HasAnyPropertyFlags(EPropertyFlags::CPF_ConstParm);
-                    bp_function_arg.new_bool(STR("is_out"), is_out);
-                    bp_function_arg.new_bool(STR("is_return"), param->HasAnyPropertyFlags(Unreal::EPropertyFlags::CPF_ReturnParm));
+                    bp_function_arg["is_out"] = is_out;
+                    bp_function_arg["is_return"] = param->HasAnyPropertyFlags(Unreal::EPropertyFlags::CPF_ReturnParm);
+                    bp_function_args_array.emplace_back(std::move(bp_function_arg));
                 }
+                bp_function["args"] = std::move(bp_function_args_array);
+                functions_array.emplace_back(std::move(bp_function));
             }
+            bp_class["functions"] = std::move(functions_array);
 
-            auto& properties = bp_class.new_array(STR("properties"));
-            for (FProperty* property : object_as_class->ForEachProperty())
+            glz::generic::array_t properties_array{};
+            for (FProperty* property : TFieldRange<FProperty>(object_as_class, EFieldIterationFlags::IncludeDeprecated))
             {
                 if (should_skip_property(property))
                 {
                     continue;
                 }
 
-                auto& bp_property = properties.new_object();
-                bp_property.new_string(STR("name"), property->GetName());
-                bp_property.new_string(STR("type"), generate_property_cxx_name(property, true, object_as_class));
+                glz::generic bp_property = glz::generic::object_t{};
+                bp_property["name"] = to_string(property->GetName());
+                bp_property["type"] = to_string(generate_property_cxx_name(property, true, object_as_class));
+                properties_array.emplace_back(std::move(bp_property));
             }
+            bp_class["properties"] = std::move(properties_array);
 
-            auto& delegates = bp_class.new_array(STR("delegates"));
-            for (UFunction* delegate_function : object_as_class->ForEachFunction())
+            glz::generic::array_t delegates_array{};
+            for (UFunction* delegate_function : TFieldRange<UFunction>(object_as_class, EFieldIterationFlags::None))
             {
                 if (should_skip_general_function(delegate_function))
                 {
@@ -312,32 +321,40 @@ namespace RC::UEGenerator::JSONDumper
                     continue;
                 }
 
-                auto& bp_delegate = delegates.new_object();
-                bp_delegate.new_string(STR("name"), delegate_function->GetName());
+                glz::generic bp_delegate = glz::generic::object_t{};
+                bp_delegate["name"] = to_string(delegate_function->GetName());
 
-                auto& bp_delegate_args = bp_delegate.new_array(STR("args"));
-                for (FProperty* param : delegate_function->ForEachProperty())
+                glz::generic::array_t bp_delegate_args_array{};
+                for (FProperty* param : TFieldRange<FProperty>(delegate_function, EFieldIterationFlags::IncludeDeprecated))
                 {
                     if (should_skip_property(param))
                     {
                         continue;
                     }
 
-                    auto& bp_delegate_arg = bp_delegate_args.new_object();
-                    bp_delegate_arg.new_string(STR("name"), param->GetName());
-                    bp_delegate_arg.new_string(STR("type"), generate_property_cxx_name(param, true, delegate_function));
+                    glz::generic bp_delegate_arg = glz::generic::object_t{};
+                    bp_delegate_arg["name"] = to_string(param->GetName());
+                    bp_delegate_arg["type"] = to_string(generate_property_cxx_name(param, true, delegate_function));
                     bool is_out = param->HasAnyPropertyFlags(EPropertyFlags::CPF_OutParm) && !param->HasAnyPropertyFlags(EPropertyFlags::CPF_ConstParm);
-                    bp_delegate_arg.new_bool(STR("is_out"), is_out);
-                    bp_delegate_arg.new_bool(STR("is_return"), param->HasAnyPropertyFlags(Unreal::EPropertyFlags::CPF_ReturnParm));
+                    bp_delegate_arg["is_out"] = is_out;
+                    bp_delegate_arg["is_return"] = param->HasAnyPropertyFlags(Unreal::EPropertyFlags::CPF_ReturnParm);
+                    bp_delegate_args_array.emplace_back(std::move(bp_delegate_arg));
                 }
+                bp_delegate["args"] = std::move(bp_delegate_args_array);
+                delegates_array.emplace_back(std::move(bp_delegate));
             }
+            bp_class["delegates"] = std::move(delegates_array);
 
+            json_array.emplace_back(std::move(bp_class));
             return LoopAction::Continue;
         });
 
         auto json_file = File::open(file_name, File::OpenFor::Writing, File::OverwriteExistingFile::Yes, File::CreateIfNonExistent::Yes);
-        int32_t indent_level{};
-        json_file.write_string_to_file(json.serialize(JSON::ShouldFormat::Yes, &indent_level));
+        glz::generic json_root{std::move(json_array)};
+        if (auto result = glz::write<glz::opts{.prettify = true}>(json_root); result.has_value())
+        {
+            json_file.write_string_to_file(to_wstring(result.value()));
+        }
         json_file.close();
 
         Output::send(STR("Unloading all forcefully loaded assets\n"));

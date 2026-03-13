@@ -13,12 +13,11 @@
 #include <LuaType/LuaCustomProperty.hpp>
 #pragma warning(disable : 4005)
 #include <Unreal/FOutputDevice.hpp>
-#include <Unreal/FProperty.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/NameTypes.hpp>
-#include <Unreal/UClass.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectArray.hpp>
-#include <Unreal/UStruct.hpp>
 #include <Unreal/VersionedContainer/Container.hpp>
 #include <Unreal/World.hpp>
 #pragma warning(default : 4005)
@@ -349,6 +348,17 @@ namespace RC::LuaType
     RC_UE4SS_API auto construct_uclass(const LuaMadeSimple::Lua&) -> void;
     RC_UE4SS_API auto construct_xproperty(const LuaMadeSimple::Lua&, Unreal::FProperty* property) -> void;
 
+    auto convert_lua_table_to_struct(const LuaMadeSimple::Lua& lua,
+                                     Unreal::UScriptStruct* script_struct,
+                                     void* data,
+                                     int table_index,
+                                     Unreal::UObject* base = nullptr) -> void;
+    auto convert_struct_to_lua_table(const LuaMadeSimple::Lua& lua,
+                                     Unreal::UScriptStruct* script_struct,
+                                     void* data,
+                                     bool create_new_table = true,
+                                     Unreal::UObject* base = nullptr) -> void;
+
     // Push to Lua -> START
     RC_UE4SS_API auto push_unhandledproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_objectproperty(const PusherParams&) -> void;
@@ -363,6 +373,7 @@ namespace RC::LuaType
     RC_UE4SS_API auto push_uint64property(const PusherParams&) -> void;
     RC_UE4SS_API auto push_structproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_arrayproperty(const PusherParams&) -> void;
+    RC_UE4SS_API auto push_setproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_mapproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_floatproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_doubleproperty(const PusherParams&) -> void;
@@ -372,8 +383,13 @@ namespace RC::LuaType
     RC_UE4SS_API auto push_nameproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_textproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_strproperty(const PusherParams&) -> void;
-    RC_UE4SS_API auto push_softclassproperty(const PusherParams&) -> void;
+    RC_UE4SS_API auto push_utf8strproperty(const PusherParams&) -> void;
+    RC_UE4SS_API auto push_ansistrproperty(const PusherParams&) -> void;
+    RC_UE4SS_API auto push_softobjectproperty(const PusherParams&) -> void;
     RC_UE4SS_API auto push_interfaceproperty(const PusherParams&) -> void;
+    RC_UE4SS_API auto push_delegateproperty(const PusherParams&) -> void;
+    RC_UE4SS_API auto push_multicastdelegateproperty(const PusherParams&) -> void;
+    RC_UE4SS_API auto push_multicastsparsedelegateproperty(const PusherParams&) -> void;
 
     RC_UE4SS_API auto push_functionproperty(const FunctionPusherParams&) -> void;
     // Push to Lua -> END
@@ -572,7 +588,7 @@ namespace RC::LuaType
                     {
                         obj_as_struct = reflected_object->GetClassPrivate();
                     }
-                    auto* property = obj_as_struct->FindProperty(Unreal::FName(property_name));
+                    auto* property = obj_as_struct->FindProperty(Unreal::FName(property_name, Unreal::FNAME_Find));
 
                     construct_xproperty(lua, property);
                     return 1;
@@ -704,8 +720,8 @@ Overloads:
 
             table.add_pair("IsValid", [](const LuaMadeSimple::Lua& lua) -> int {
                 const auto& lua_object = lua.get_userdata<SelfType>();
-                if (lua_object.get_remote_cpp_object() && !lua_object.get_remote_cpp_object()->IsUnreachable() &&
-                    is_object_in_global_unreal_object_map(lua_object.get_remote_cpp_object()))
+                if (lua_object.get_remote_cpp_object() && is_object_in_global_unreal_object_map(lua_object.get_remote_cpp_object()) &&
+                    !lua_object.get_remote_cpp_object()->IsUnreachable())
                 {
                     lua.set_bool(true);
                 }
@@ -761,7 +777,7 @@ Overloads:
                 return;
             }
 
-            Unreal::FName property_name = Unreal::FName(member_name);
+            Unreal::FName property_name = Unreal::FName(member_name, Unreal::FNAME_Find);
             Unreal::FField* field = LuaCustomProperty::StaticStorage::property_list.find_or_nullptr(lua_object.get_remote_cpp_object(), member_name);
 
             if (!field)
@@ -818,15 +834,6 @@ Overloads:
       private:
         auto static setup_metamethods(LuaMadeSimple::Type::BaseObject& base_object) -> void
         {
-            base_object.get_metamethods().create(LuaMadeSimple::Lua::MetaMethod::Index, [](const LuaMadeSimple::Lua& lua) -> int {
-                prepare_to_handle(Operation::Get, lua);
-                return 1;
-            });
-
-            base_object.get_metamethods().create(LuaMadeSimple::Lua::MetaMethod::NewIndex, [](const LuaMadeSimple::Lua& lua) -> int {
-                prepare_to_handle(Operation::Set, lua);
-                return 0;
-            });
         }
 
         auto static setup_member_functions(LuaMadeSimple::Lua::Table& table) -> void
@@ -839,6 +846,11 @@ Overloads:
             table.add_pair("get", [](const LuaMadeSimple::Lua& lua) -> int {
                 prepare_to_handle(Operation::Get, lua);
                 return 1;
+            });
+
+            table.add_pair("Set", [](const LuaMadeSimple::Lua& lua) -> int {
+                prepare_to_handle(Operation::Set, lua);
+                return 0;
             });
 
             table.add_pair("set", [](const LuaMadeSimple::Lua& lua) -> int {

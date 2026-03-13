@@ -24,6 +24,12 @@ include(ProjectConfig)      # For centralized project configuration
 include(VersionChecks)      # For compiler and tool version checking
 include(ArchitectureDetection) # For CPU architecture and feature detection
 
+# Profilers option
+option(UE4SS_PROFILERS "Enable UE4SS profiling features" OFF)
+if(UE4SS_PROFILERS)
+    add_compile_definitions(UE4SS_PROFILERS)
+endif()
+
 # Check IPO/LTO support
 check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
 message("IPO/LTO support: ${IPO_SUPPORTED}; ${IPO_ERROR}")
@@ -59,8 +65,11 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/${CMAKE_INSTALL
 add_subdirectory("cmake/modules/CompilerOptions")
 
 # Set compiler options
-add_compile_options("$<$<NOT:$<COMPILE_LANGUAGE:ASM_MASM>>:${DEFAULT_COMPILER_FLAGS}>")
-add_link_options("${DEFAULT_SHARED_LINKER_FLAGS}" "${DEFAULT_EXE_LINKER_FLAGS}")
+# NOTE: Do NOT use add_compile_options/add_link_options here as they won't propagate to external consumers
+# Instead, these are applied via apply_compiler_settings_to_targets() which uses target_*_options with PUBLIC
+# visibility on the UE4SS target, ensuring proper propagation to downstream projects
+# add_compile_options("$<$<NOT:$<COMPILE_LANGUAGE:ASM_MASM>>:${DEFAULT_COMPILER_FLAGS}>")
+# add_link_options("${DEFAULT_SHARED_LINKER_FLAGS}" "${DEFAULT_EXE_LINKER_FLAGS}")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Initialize Compiler flags after compiler detection.

@@ -2,18 +2,11 @@
 #include <GUI/UFunctionCallerWidget.hpp>
 #include <Helpers/String.hpp>
 #include <Unreal/FOutputDevice.hpp>
-#include <Unreal/FProperty.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Hooks.hpp>
-#include <Unreal/Property/FArrayProperty.hpp>
-#include <Unreal/Property/FBoolProperty.hpp>
-#include <Unreal/Property/FClassProperty.hpp>
-#include <Unreal/Property/FObjectProperty.hpp>
-#include <Unreal/Property/FStructProperty.hpp>
-#include <Unreal/UClass.hpp>
-#include <Unreal/UFunction.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
-#include <Unreal/UScriptStruct.hpp>
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -39,7 +32,7 @@ namespace RC::GUI
         {
             return;
         }
-        for (UFunction* function : instance->GetClassPrivate()->ForEachFunctionInChain())
+        for (UFunction* function : TFieldRange<UFunction>(instance->GetClassPrivate(), EFieldIterationFlags::IncludeAll))
         {
             bool should_cache_function{};
             if (m_searcher.was_search_requested())
@@ -70,7 +63,7 @@ namespace RC::GUI
             }
             auto& cached_function = m_callable_functions.emplace_back(CallableUFunction{function});
 
-            for (FProperty* param : cached_function.function->ForEachProperty())
+            for (FProperty* param : TFieldRange<FProperty>(cached_function.function, EFieldIterationFlags::IncludeDeprecated))
             {
                 if (param->HasAllPropertyFlags(CPF_ReturnParm))
                 {
@@ -130,7 +123,7 @@ namespace RC::GUI
     {
         selectable_function.is_selected = true;
         m_currently_selected_function = &selectable_function;
-        for (FProperty* param : m_currently_selected_function->function->ForEachProperty())
+        for (FProperty* param : TFieldRange<FProperty>(m_currently_selected_function->function, EFieldIterationFlags::IncludeDeprecated))
         {
             if (param->HasAllPropertyFlags(CPF_ReturnParm)) continue;
             m_params_for_selected_function.emplace_back(UFunctionParam{{}, to_string(param->GetName()).c_str(), param});
@@ -143,7 +136,7 @@ namespace RC::GUI
     static FOutputDevice s_ar{};
     static UFunction* s_function{};
     static UObject* s_executor{};
-    auto call_process_console_exec(UObject*, UFunction*, void*) -> void
+    auto call_process_console_exec(Hook::TCallbackIterationData<void>&, UObject*, UFunction*, void*) -> void
     {
         if (s_do_call)
         {
@@ -180,7 +173,7 @@ namespace RC::GUI
         if (!s_is_hooked)
         {
             s_is_hooked = true;
-            Hook::RegisterProcessEventPostCallback(call_process_console_exec);
+            Hook::RegisterProcessEventPostCallback(call_process_console_exec, {false, false, STR("UE4SS"), STR("FunctionCallerWidgetHook")});
         }
         s_do_call = true;
     }
@@ -343,9 +336,12 @@ namespace RC::GUI
                         cache_instance(instance);
                     }
 
-                    for (auto& callable_function : m_callable_functions)
+                    for (size_t i = 0; i < m_callable_functions.size(); ++i)
                     {
-                        if (ImGui::Selectable(callable_function.cached_name.c_str(), callable_function.is_selected))
+                        auto& callable_function = m_callable_functions[i];
+                        // Append index to create unique ID that won't be displayed due to ## separator
+                        auto unique_label = fmt::format("{}##{}", callable_function.cached_name, i);
+                        if (ImGui::Selectable(unique_label.c_str(), callable_function.is_selected))
                         {
                             deselect_all_functions();
                             select_function(callable_function);

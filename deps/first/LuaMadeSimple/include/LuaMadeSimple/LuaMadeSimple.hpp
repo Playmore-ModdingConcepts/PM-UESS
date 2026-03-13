@@ -20,6 +20,8 @@ namespace RC::LuaMadeSimple
     // Dump the current state of the Lua stack
     auto RC_LMS_API dump_stack(lua_State*, const char* message = "") -> void;
 
+    auto RC_LMS_API get_stack_dump(lua_State* lua_state, const char* message = "") -> std::string;
+
     // Internal functions
     // All Lua <-> C++ calls go through these two C++ functions
     auto RC_LMS_API process_lua_function(lua_State* lua_state) -> int;
@@ -60,6 +62,16 @@ namespace RC::LuaMadeSimple
     };
 
     using PostFunctionProcessCallback = void (*)(const Lua&);
+
+    // Error callback type for external error handling/logging
+    // Parameters: lua_State*, error_message, traceback
+    using LuaErrorCallback = void (*)(lua_State*, const std::string&, const std::string&);
+
+    // Register a callback to be called when Lua errors occur
+    RC_LMS_API auto register_error_callback(LuaErrorCallback callback) -> void;
+
+    // Unregister an error callback
+    RC_LMS_API auto unregister_error_callback(LuaErrorCallback callback) -> void;
 
     /**
      * Main helper for Lua
@@ -461,6 +473,7 @@ namespace RC::LuaMadeSimple
       public:
         // Debug function
         RC_LMS_API auto dump_stack(const char* message = "") const -> void;
+        RC_LMS_API auto get_stack_dump(const char* message = "") const -> std::string;
 
         RC_LMS_API auto handle_error(const std::string&) const -> const std::string;
         RC_LMS_API auto throw_error(const std::string&) const -> void;
@@ -521,7 +534,9 @@ namespace RC::LuaMadeSimple
 
         [[nodiscard]] RC_LMS_API auto is_string(int32_t force_index = 1) const -> bool;
         [[nodiscard]] RC_LMS_API auto get_string(int32_t force_index = 1) const -> std::string_view;
-        RC_LMS_API auto set_string(std::string_view) const -> void;
+        RC_LMS_API auto set_string(std::string_view str) const -> void;
+        RC_LMS_API auto set_string(const char* str, size_t len) const -> void;
+        RC_LMS_API auto set_string(const uint8_t* str, size_t len) const -> void;
 
         // is_number == lua_isnumber, which returns true if the value is a number or a string convertible to a number
         [[nodiscard]] RC_LMS_API auto is_number(int32_t force_index = 1) const -> bool;
@@ -773,6 +788,10 @@ namespace RC::LuaMadeSimple
     RC_LMS_API auto handle_error(lua_State*, const std::string&) -> const std::string;
     RC_LMS_API auto throw_error(lua_State*, const std::string&) -> void;
     [[nodiscard]] RC_LMS_API auto new_state() -> Lua&;
+
+    // Push the error handler function onto the stack and return its stack index
+    // Use this with lua_pcall to capture callstack before it unwinds
+    RC_LMS_API auto push_pcall_error_handler(lua_State* L) -> int;
 
     template <typename CodeToTry>
     auto constexpr TRY(lua_State* lua_state, CodeToTry code_to_try) -> int

@@ -107,4 +107,4 @@ RegisterKeyBind(Key.Y, {ModifierKey.CONTROL}, CreatePlayer)
 
 RegisterKeyBind(Key.U, {ModifierKey.CONTROL}, DestroyPlayer)
 
-RegisterKeyBind(Key.I, {ModifierKey.CONTROL}, TeleportPlayers)
+RegisterKeyBind(Key.P, {ModifierKey.CONTROL}, TeleportPlayers)

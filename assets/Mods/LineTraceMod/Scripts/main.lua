@@ -76,4 +76,4 @@ local function GetObjectName()
     end
 end
 
-RegisterKeyBind(Key.F3, GetObjectName)
+RegisterKeyBind(Key.L, {ModifierKey.CONTROL}, GetObjectName)

@@ -9,24 +9,32 @@
 #include <USMapGenerator/Generator.hpp>
 #include <USMapGenerator/writer.h>
 #include <Unreal/NameTypes.hpp>
-#include <Unreal/Property/FSetProperty.hpp>
-#include <Unreal/Property/FArrayProperty.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Property/FEnumProperty.hpp>
-#include <Unreal/Property/FMapProperty.hpp>
-#include <Unreal/Property/NumericPropertyTypes.hpp>
 #include <Unreal/Property/FOptionalProperty.hpp>
-#include <Unreal/UClass.hpp>
-#include <Unreal/UEnum.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
-#include <Unreal/UScriptStruct.hpp>
 #include <Unreal/UnrealVersion.hpp>
+#include <Unreal/UKismetSystemLibrary.hpp>
 
 #include "UE4SSProgram.hpp"
 
 namespace RC::OutTheShade
 {
     using namespace ::RC::Unreal;
+
+    enum class EUsmapVersion : uint8_t
+    {
+        Initial = 0,
+        PackageVersioning = 1,
+        LongFName = 2,
+        LargeEnums = 3,
+        ExplicitEnumValues = 4,
+
+        Latest = ExplicitEnumValues,
+        LatestPlusOne
+    };
 
     enum class EPropertyType : uint8_t
     {
@@ -301,7 +309,7 @@ namespace RC::OutTheShade
                 if (Struct->GetSuperStruct() && !NameMap.contains(Struct->GetSuperStruct()->GetNamePrivate()))
                     NameMap.insert_or_assign(Struct->GetSuperStruct()->GetNamePrivate(), 0);
 
-                for (FProperty* Prop : Struct->ForEachProperty())
+                for (FProperty* Prop : TFieldRange<FProperty>(Struct, EFieldIterationFlags::IncludeDeprecated))
                 {
                     NameMap.insert_or_assign(Prop->GetFName(), 0);
                 }
@@ -354,8 +362,8 @@ namespace RC::OutTheShade
                 NameView = NameView.substr(Find + 2);
             }
 
-            // Warning: Converting size_t (uint64) to uint8_t.
-            Buffer.Write<uint8_t>(static_cast<uint8_t>(NameView.length()));
+            // LongFName support (version >= 2): use uint16 for name lengths
+            Buffer.Write<uint16_t>(static_cast<uint16_t>(NameView.length()));
             Buffer.WriteString(NameView);
 
             CurrentNameIndex++;
@@ -368,20 +376,19 @@ namespace RC::OutTheShade
         {
             Buffer.Write(NameMap[Enum->GetNamePrivate()]);
 
-            // limit to 255 entries; why is this a byte in the first place?
-            uint8_t EnumNameCount{};
+            // LargeEnums support (version >= 3): use uint16 for enum member counts
+            uint16_t EnumNameCount{};
             for (auto _ : Enum->ForEachName())
             {
                 ++EnumNameCount;
-                if (EnumNameCount >= std::numeric_limits<uint8_t>::max()) break;
             }
-            Buffer.Write<uint8_t>(EnumNameCount);
+            Buffer.Write<uint16_t>(EnumNameCount);
 
-            int numSoFar = 0;
-            for (auto& [Key, _] : Enum->ForEachName())
+            // ExplicitEnumValues (version >= 4): write value then name index
+            for (auto& [Key, Value] : Enum->ForEachName())
             {
-                Buffer.Write<uint32_t>(NameMap[Key]);
-                if (++numSoFar >= EnumNameCount) break;
+                Buffer.Write<int64_t>(Value);           // explicit enum value
+                Buffer.Write<int32_t>(NameMap[Key]);    // name index
             }
         }
 
@@ -398,7 +405,7 @@ namespace RC::OutTheShade
             uint16_t PropCount = 0;
             uint16_t SerializablePropCount = 0;
 
-            for (FProperty* Props : Struct->ForEachProperty())
+            for (FProperty* Props : TFieldRange<FProperty>(Struct, EFieldIterationFlags::IncludeDeprecated))
             {
                 FPropertyData Data(Props, PropCount);
 
@@ -426,7 +433,7 @@ namespace RC::OutTheShade
         Buffer.Write<uint32_t>(0x54584543); // "CEXT"; magic
         Buffer.Write<uint8_t>(0);           // extensions layout version; 0 (Initial)
 
-        Buffer.Write<uint32_t>(3); // number of extensions, 3 right now
+        Buffer.Write<uint32_t>(2); // number of extensions (ENVP removed - now redundant with ExplicitEnumValues)
 
         // extension 1: PPTH (object paths)
         Buffer.Write<uint32_t>(0x48545050); // ext id
@@ -482,7 +489,7 @@ namespace RC::OutTheShade
             }
 
             std::vector<uint64_t> propFlags;
-            for (FProperty* Props : Struct->ForEachProperty())
+            for (FProperty* Props : TFieldRange<FProperty>(Struct, EFieldIterationFlags::IncludeDeprecated))
                 propFlags.push_back(static_cast<uint64_t>(Props->GetPropertyFlags()));
             Buffer.Write<uint32_t>(static_cast<uint32_t>(propFlags.size()));
             for (uint64_t propFlag : propFlags)
@@ -495,32 +502,7 @@ namespace RC::OutTheShade
         Buffer.Write<uint32_t>(extEndPos - extStartPos);
         Buffer.GetBuffer().seekp(extEndPos);
 
-        // extension 3: ENVP (enum name/value pairs)
-        Buffer.Write<uint32_t>(0x50564E45); // ext id
-        Buffer.Write<uint32_t>(0);          // size; unknown for now
-
-        extStartPos = Buffer.GetBuffer().tellp();
-        Buffer.Write<uint8_t>(0); // ENVP version; 0
-        Buffer.Write<uint32_t>(static_cast<uint32_t>(Enums.size()));
-        for (auto Enum : Enums)
-        {
-            uint32_t EnumNameCount = 0;
-            for (auto _ : Enum->ForEachName())
-                ++EnumNameCount;
-            Buffer.Write<uint32_t>(EnumNameCount);
-
-            for (auto& [Key, val] : Enum->ForEachName())
-            {
-                Buffer.Write<uint32_t>(NameMap[Key]);
-                Buffer.Write<int64_t>(val);
-            }
-        }
-        extEndPos = Buffer.GetBuffer().tellp();
-
-        Buffer.GetBuffer().seekp(extStartPos);
-        Buffer.GetBuffer().seekp(-(int32)sizeof(uint32), std::ios_base::cur);
-        Buffer.Write<uint32_t>(extEndPos - extStartPos);
-        Buffer.GetBuffer().seekp(extEndPos);
+        // ENVP extension removed - enum values are now written explicitly in the main format (version 4)
 
         // end of extensions //
 
@@ -529,11 +511,35 @@ namespace RC::OutTheShade
         UsmapData.resize(UncompressedStream.size());
         memcpy(UsmapData.data(), UncompressedStream.data(), UsmapData.size());
 
-        auto filename = to_string(UE4SSProgram::get_program().get_working_directory()) + "//Mappings.usmap";
+        // Build filename: GameName-EngineVersion-UE4SSCommitSHA.usmap
+        FString game_name_fstr = UKismetSystemLibrary::GetGameName();
+        FString engine_version_fstr = UKismetSystemLibrary::GetEngineVersion();
+
+
+        std::string engine_version = to_utf8_string(*engine_version_fstr);
+        std::string game_name = to_utf8_string(*game_name_fstr);
+        std::string commit_sha = UE4SS_LIB_BUILD_GITSHA;
+
+        // Sanitize strings for filename (replace spaces and invalid chars with underscores)
+        auto sanitize_for_filename = [](std::string& str) {
+            for (char& c : str)
+            {
+                if (c == ' ' || c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
+                {
+                    c = '_';
+                }
+            }
+        };
+        sanitize_for_filename(engine_version);
+        sanitize_for_filename(game_name);
+
+        std::string usmap_filename = game_name + "-" + engine_version + "-" + commit_sha + ".usmap";
+        auto filename = to_string(UE4SSProgram::get_program().get_working_directory()) + "//" + usmap_filename;
         auto FileOutput = FileWriter(filename.c_str());
 
         FileOutput.Write<uint16_t>(0x30C4); // magic
-        FileOutput.Write<uint8_t>(0);       // version
+        FileOutput.Write<uint8_t>(static_cast<uint8_t>(EUsmapVersion::Latest)); // version
+        FileOutput.Write<int32_t>(0);       // bHasVersionInfo (false, no UE4/UE5 version info)
         FileOutput.Write<uint8_t>(0);       // compression
         // Warning: Converting size_t (uint64) to int.
         FileOutput.Write<uint32_t>(static_cast<uint32_t>(UsmapData.size())); // compressed size
@@ -542,5 +548,6 @@ namespace RC::OutTheShade
         FileOutput.Write(UsmapData.data(), UsmapData.size());
 
         Output::send(STR("Mappings Generation Completed Successfully!\n"));
+        Output::send(STR("Output file: {}\n"), to_wstring(usmap_filename));
     }
 } // namespace RC::OutTheShade

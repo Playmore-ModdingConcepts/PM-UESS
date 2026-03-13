@@ -4,8 +4,8 @@
 #include <LuaType/LuaUFunction.hpp>
 #include <stdexcept>
 #pragma warning(disable : 4005)
-#include <Unreal/FProperty.hpp>
-#include <Unreal/UFunction.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
 #pragma warning(default : 4005)
 
 namespace RC::LuaType
@@ -42,7 +42,7 @@ namespace RC::LuaType
         if (lua.is_nil(-1))
         {
             lua.discard_value(-1);
-            LuaType::UObject::construct(lua, lua_object);
+            LuaType::UStruct::construct(lua, lua_object);
             setup_metamethods(lua_object);
             setup_member_functions<LuaMadeSimple::Type::IsFinal::Yes>(table);
             lua.new_metatable<LuaType::UFunction>(metatable_name, lua_object.get_metamethods());
@@ -56,7 +56,7 @@ namespace RC::LuaType
 
     auto UFunction::construct(const LuaMadeSimple::Lua& lua, BaseObject& construct_to) -> const LuaMadeSimple::Lua::Table
     {
-        LuaMadeSimple::Lua::Table table = UObject::construct(lua, construct_to);
+        LuaMadeSimple::Lua::Table table = UStruct::construct(lua, construct_to);
 
         setup_member_functions<LuaMadeSimple::Type::IsFinal::No>(table);
 

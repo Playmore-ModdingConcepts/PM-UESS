@@ -21,6 +21,7 @@ class ReleaseHandler:
         # List of CPP Mods with flags indicating if they need a config folder and if they should be included in release builds
         self.cpp_mods = {
             'KismetDebuggerMod': {'create_config': True, 'include_in_release': False},
+            'EventViewerMod': {'create_config': False, 'include_in_release': False},
         }
 
         # Lua mods to exclude from the non-dev/release version of the zip
@@ -28,6 +29,11 @@ class ReleaseHandler:
         self.lua_mods_to_exclude_from_release = [
             'ActorDumperMod',
             'jsbLuaProfilerMod',
+        ]
+
+        # Lua mods to disable (but keep) in the non-dev/release version
+        self.lua_mods_to_disable_in_release = [
+            'LineTraceMod',
         ]
 
         # Files in root/assets to exclude from the non-dev/release version of the zip 
@@ -39,7 +45,8 @@ class ReleaseHandler:
             'MemberVarLayoutTemplates',
             'CustomGameConfigs',
             'MapGenBP',
-            'Changelog.md'
+            'Changelog.md',
+            'Default_UVTD_Configs'
         ]
 
         # Settings to change in the release. The default settings in assets/UE4SS-settings.ini are for dev
@@ -92,14 +99,14 @@ class ReleaseHandler:
 
     def modify_settings(self, settings_to_modify):
         config_path = os.path.join(self.ue4ss_dir, 'UE4SS-settings.ini')
-        with open(config_path, mode='r', encoding='utf-8-sig') as file:
+        with open(config_path, mode='r', encoding='utf-8') as file:
             content = file.read()
 
         for key, value in settings_to_modify.items():
             pattern = rf'(^{key}\s*=).*?$'
             content = re.sub(pattern, rf'\1 {value}', content, flags=re.MULTILINE)
 
-        with open(config_path, mode='w', encoding='utf-8-sig') as file:
+        with open(config_path, mode='w', encoding='utf-8') as file:
             file.write(content)
 
     def scan_directories(self):
@@ -149,7 +156,7 @@ class ReleaseHandler:
                 mods_to_remove_from_release.append(mod_name)
 
         mods_path = os.path.join(self.ue4ss_dir, 'Mods', 'mods.txt')
-        with open(mods_path, mode='r', encoding='utf-8-sig') as file:
+        with open(mods_path, mode='r', encoding='utf-8') as file:
             content = file.readlines()
 
         if self.cpp_mods:
@@ -157,13 +164,25 @@ class ReleaseHandler:
 
         if not self.is_dev_release:
             content = [line for line in content if not any(mod in line for mod in mods_to_remove_from_release)]
+            # Disable mods that should be kept but disabled in release
+            new_content = []
+            for line in content:
+                disabled = False
+                for mod in self.lua_mods_to_disable_in_release:
+                    if mod in line:
+                        new_content.append(f'{mod} : 0\n')
+                        disabled = True
+                        break
+                if not disabled:
+                    new_content.append(line)
+            content = new_content
 
-        with open(mods_path, mode='w', encoding='utf-8-sig') as file:
+        with open(mods_path, mode='w', encoding='utf-8') as file:
             file.writelines(content)
 
     def modify_mods_json(self):
         mods_path = os.path.join(self.ue4ss_dir, 'Mods', 'mods.json')
-        with open(mods_path, mode='r', encoding='utf-8-sig') as file:
+        with open(mods_path, mode='r', encoding='utf-8') as file:
             content = json.load(file)
 
         if self.cpp_mods:
@@ -180,8 +199,12 @@ class ReleaseHandler:
                 if mod['mod_name'] not in self.lua_mods_to_exclude_from_release
                 and self.cpp_mods.get(mod['mod_name'], {}).get('include_in_release', True)
             ]
+            # Disable mods that should be kept but disabled in release
+            for mod in content:
+                if mod['mod_name'] in self.lua_mods_to_disable_in_release:
+                    mod['mod_enabled'] = False
 
-        with open(mods_path, mode='w', encoding='utf-8-sig') as file:
+        with open(mods_path, mode='w', encoding='utf-8') as file:
             json.dump(content, file, indent=4)
 
     def copy_executables(self, dwmapi_dll_path, ue4ss_dll_path, ue4ss_pdb_path):

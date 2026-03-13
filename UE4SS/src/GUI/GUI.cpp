@@ -9,6 +9,8 @@
 #include <GUI/DX11.hpp>
 #include <GUI/Dumpers.hpp>
 #include <GUI/GLFW3_OpenGL3.hpp>
+#include <GUI/LuaDebugger.hpp>
+#include <GUI/Profilers.hpp>
 #include <GUI/Windows.hpp>
 #include <fonts/droidsansfallback.cpp>
 
@@ -92,13 +94,11 @@ namespace RC::GUI
                     if (ImGui::Button(ICON_FA_ARCHIVE " Dump Objects & Properties"))
                     {
                         m_event_thread_busy = true;
-                        UE4SSProgram::get_program().queue_event(
-                                [](void* data) {
-                                    UE4SSProgram::dump_all_objects_and_properties(UE4SSProgram::get_program().get_object_dumper_output_directory() + STR("\\") +
-                                                                                  UE4SSProgram::m_object_dumper_file_name);
-                                    static_cast<GUI::DebuggingGUI*>(data)->m_event_thread_busy = false;
-                                },
-                                this);
+                        UE4SSProgram::get_program().queue_event([this]() {
+                            UE4SSProgram::dump_all_objects_and_properties(UE4SSProgram::get_program().get_object_dumper_output_directory() + STR("\\") +
+                                                                          UE4SSProgram::m_object_dumper_file_name);
+                            m_event_thread_busy = false;
+                        });
                     }
                     if (event_thread_busy)
                     {
@@ -113,12 +113,10 @@ namespace RC::GUI
                     if (ImGui::Button(ICON_FA_SYNC " Restart All Mods"))
                     {
                         m_event_thread_busy = true;
-                        UE4SSProgram::get_program().queue_event(
-                                [](void* data) {
-                                    UE4SSProgram::get_program().reinstall_mods();
-                                    static_cast<GUI::DebuggingGUI*>(data)->m_event_thread_busy = false;
-                                },
-                                this);
+                        UE4SSProgram::get_program().queue_event([this]() {
+                            UE4SSProgram::get_program().queue_reinstall_mods();
+                            m_event_thread_busy = false;
+                        });
                     }
                     if (event_thread_busy)
                     {
@@ -177,6 +175,20 @@ namespace RC::GUI
                     BPMods::render();
                     ImGui::EndTabItem();
                 }
+
+                if (ImGui::BeginTabItem(ICON_FA_BUG " Lua Debugger"))
+                {
+                    LuaDebugger::get().render();
+                    ImGui::EndTabItem();
+                }
+
+#ifdef UE4SS_PROFILER_TAB
+                if (ImGui::BeginTabItem(ICON_FA_TACHOMETER_ALT " Profilers"))
+                {
+                    Profilers::render();
+                    ImGui::EndTabItem();
+                }
+#endif
 
                 {
                     std::lock_guard<std::mutex> guard(m_tabs_mutex);
@@ -500,7 +512,7 @@ namespace RC::GUI
         float base_font_size = 14 * UE4SSProgram::settings_manager.Debug.DebugGUIFontScaling;
 
         // Increase font atlas size (if needed for many characters)
-        io.Fonts->TexDesiredWidth = 2048; // Increase the atlas size to allow more glyphs to fit
+        io.Fonts->TexMinWidth = 2048; // Increase the atlas size to allow more glyphs to fit
 
         // Load base font (Latin characters)
         ImFontConfig font_cfg;
@@ -526,9 +538,6 @@ namespace RC::GUI
         icons_cfg.PixelSnapH = true;
         icons_cfg.GlyphMinAdvanceX = icon_font_size;
         io.Fonts->AddFontFromMemoryTTF(FaSolid900, sizeof(FaSolid900), icon_font_size, &icons_cfg, icons_ranges);
-
-        // Build font atlas
-        io.Fonts->Build();
 
         m_os_backend->init();
         m_gfx_backend->init();
